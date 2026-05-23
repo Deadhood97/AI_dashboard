@@ -272,6 +272,9 @@ def main() -> None:
     st.title("Smart AI Dashboarding")
     st.caption("Upload a CSV to preview the data and generate basic column metadata.")
 
+    if "submitted_dataset_key" not in st.session_state:
+        st.session_state["submitted_dataset_key"] = None
+
     dataset_description = st.text_area(
         "Dataset description",
         placeholder=(
@@ -288,37 +291,74 @@ def main() -> None:
         return
 
     raw_bytes = uploaded_file.getvalue()
-    logger.info(
-        "CSV upload received: filename=%s size_bytes=%s",
-        uploaded_file.name,
-        len(raw_bytes),
-    )
-
-    try:
-        df, parser_used = read_csv_with_fallbacks(uploaded_file)
-    except Exception as exc:
-        logger.exception("CSV upload failed: filename=%s", uploaded_file.name)
-        st.error(f"Could not read CSV: {exc}")
-        st.caption(f"Details were logged to `{APP_LOG_PATH}`.")
-        st.stop()
-
     cleaned_description = dataset_description.strip()
-    metadata = build_dataset_metadata(
-        df,
-        uploaded_file.name,
-        raw_bytes,
-        cleaned_description,
+    dataset_key = (
+        f"{uploaded_file.name}:"
+        f"{hashlib.sha256(raw_bytes).hexdigest()}:"
+        f"{hashlib.sha256(cleaned_description.encode('utf-8')).hexdigest()}"
     )
-    st.session_state["dataset_metadata"] = metadata
-    metadata_path = save_metadata(metadata)
-    logger.info(
-        "CSV upload processed: filename=%s rows=%s columns=%s description_chars=%s metadata_path=%s",
-        uploaded_file.name,
-        metadata["row_count"],
-        metadata["column_count"],
-        len(cleaned_description),
-        metadata_path,
-    )
+
+    if st.session_state.get("submitted_dataset_key") != dataset_key:
+        st.session_state.pop("dataset_df", None)
+        st.session_state.pop("dataset_metadata", None)
+        st.session_state.pop("metadata_path", None)
+        st.session_state.pop("parser_used", None)
+        st.session_state.pop("semantic_understanding", None)
+        st.session_state.pop("semantic_understanding_key", None)
+        st.session_state.pop("semantic_understanding_path", None)
+        st.session_state["submitted_dataset_key"] = None
+
+    dataset_already_submitted = st.session_state.get("submitted_dataset_key") == dataset_key
+    submit_clicked = st.button("Submit dataset", type="primary")
+
+    if not dataset_already_submitted and not submit_clicked:
+        st.info("Add a description if helpful, then submit the dataset to generate metadata.")
+        return
+
+    if dataset_already_submitted and not submit_clicked:
+        df = st.session_state["dataset_df"]
+        metadata = st.session_state["dataset_metadata"]
+        metadata_path = st.session_state["metadata_path"]
+        parser_used = st.session_state["parser_used"]
+    else:
+        logger.info(
+            "CSV upload submitted: filename=%s size_bytes=%s",
+            uploaded_file.name,
+            len(raw_bytes),
+        )
+
+        try:
+            df, parser_used = read_csv_with_fallbacks(uploaded_file)
+        except Exception as exc:
+            logger.exception("CSV upload failed: filename=%s", uploaded_file.name)
+            st.error(f"Could not read CSV: {exc}")
+            st.caption(f"Details were logged to `{APP_LOG_PATH}`.")
+            st.stop()
+
+        metadata = build_dataset_metadata(
+            df,
+            uploaded_file.name,
+            raw_bytes,
+            cleaned_description,
+        )
+        metadata_path = save_metadata(metadata)
+        st.session_state["submitted_dataset_key"] = dataset_key
+        st.session_state["dataset_df"] = df
+        st.session_state["dataset_metadata"] = metadata
+        st.session_state["metadata_path"] = metadata_path
+        st.session_state["parser_used"] = parser_used
+        logger.info(
+            "CSV upload processed: filename=%s rows=%s columns=%s description_chars=%s metadata_path=%s",
+            uploaded_file.name,
+            metadata["row_count"],
+            metadata["column_count"],
+            len(cleaned_description),
+            metadata_path,
+        )
+
+    if st.session_state.get("submitted_dataset_key") != dataset_key:
+        st.info("Submit the dataset to generate metadata.")
+        return
 
     st.success(f"Loaded {metadata['row_count']} rows and {metadata['column_count']} columns.")
     st.caption(f"CSV parser used: {parser_used}")

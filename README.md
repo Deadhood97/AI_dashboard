@@ -81,7 +81,7 @@ Start Streamlit:
 streamlit run app.py
 ```
 
-The current app supports CSV upload, optional dataset description capture, dataframe preview, basic column type analysis, and generated metadata storage in `artifacts/metadata/`.
+The current app supports CSV upload, optional dataset description capture, explicit dataset submission, dataframe preview, basic column type analysis, and generated metadata storage in `artifacts/metadata/`.
 
 The saved metadata includes a `schema` object with the user-provided dataset description and inferred column schema. This will be used later by the semantic understanding agent.
 

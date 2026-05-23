@@ -596,3 +596,27 @@ Moved the semantic understanding session-state lookup to after the generate butt
 Result: When the user clicks `Generate semantic understanding`, the newly generated result should render immediately in the `Semantic Understanding` tab instead of showing the stale "Click the button" info message.
 
 Reason: The previous code read session state before updating it, so Streamlit showed the success message while the display block still saw the old empty state.
+
+### Added explicit dataset submission
+
+Changed the Streamlit flow so uploading a CSV no longer immediately parses the file or generates metadata. The user now adds the dataset description, selects the CSV, and clicks `Submit dataset`.
+
+Reason: The dataset description should be finalized before metadata/schema generation so the stored schema includes the intended user context.
+
+### Added submitted dataset session state
+
+Stored the submitted dataframe, metadata, metadata path, parser used, and dataset key in Streamlit session state after submission.
+
+Reason: The app should avoid regenerating metadata on every Streamlit rerun while still resetting output when the file or description changes.
+
+### Reset semantic output when input changes
+
+Cleared prior semantic understanding results whenever the uploaded file or description changes before submission.
+
+Reason: Semantic understanding must correspond to the currently submitted dataset and description, not a stale earlier upload.
+
+### Kept submitted results visible across reruns
+
+Adjusted the submit-button logic so previously submitted results stay visible on Streamlit reruns until the file or description changes.
+
+Reason: Streamlit buttons are momentary, so the app needs to rely on session state after submission instead of hiding results when the button is no longer actively clicked.
