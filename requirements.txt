@@ -1,2 +1,7 @@
 streamlit
 pandas
+langchain-core
+langchain-openai
+python-dotenv
+pydantic
+tabulate

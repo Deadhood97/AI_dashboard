@@ -91,6 +91,28 @@ Application logs are written to `artifacts/logs/app.log`. If a CSV upload fails,
 
 If `py -3.12` is not available on a different machine, install Python 3.12 from python.org and then create the virtual environment with the available Python launcher or executable.
 
+## Standalone Semantic Agent
+
+The first standalone agent lives in `agents/semantic_understanding.py`. It uses LangChain with OpenAI structured output to produce:
+
+```python
+class SemanticUnderstanding(BaseModel):
+    dataset_domain: str
+    primary_entities: list[str]
+    important_dimensions: list[str]
+    important_metrics: list[str]
+    analytical_goals: list[str]
+    suggested_questions: list[str]
+```
+
+It can be called from Python code, or run as a CLI against a metadata JSON file and CSV:
+
+```powershell
+python -m agents.semantic_understanding --metadata artifacts\metadata\latest_metadata.json --csv path\to\dataset.csv
+```
+
+The agent reads `OPENAI_API_KEY` from `.env` and falls back to `VITE_OPENAI_API_KEY` for local compatibility. Set `OPENAI_MODEL` to override the default model.
+
 ## Source Briefs
 
 - `project-brief.md`

@@ -445,3 +445,57 @@ Tested metadata saving with the same filename/hash twice and then with the same 
 Result: The same filename/hash reused and overwrote one metadata file, while the changed hash created a second metadata file. The index contained two entries.
 
 Reason: This confirms the metadata store preserves separate datasets while avoiding duplicate artifacts for identical re-uploads.
+
+### Started standalone semantic understanding agent
+
+Added `agents/semantic_understanding.py` with a Pydantic `SemanticUnderstanding` output model and LangChain/OpenAI structured output chain.
+
+Reason: The next project milestone is an agent that can turn dataset metadata plus `df.head()` output into semantic understanding fields for later dashboard planning.
+
+### Added OpenAI key resolution for agents
+
+Implemented API key loading from `.env`, preferring `OPENAI_API_KEY` and falling back to the existing local `VITE_OPENAI_API_KEY`.
+
+Reason: The agent needs to use the existing OpenAI API key without exposing or copying the secret into tracked code.
+
+### Added semantic agent CLI
+
+Added a command-line path for running the semantic understanding agent against a metadata JSON file and a CSV file.
+
+Reason: The agent is intentionally not integrated into Streamlit yet, but a standalone CLI makes it easy to test and iterate.
+
+### Updated agent dependencies
+
+Added `langchain-core`, `langchain-openai`, `python-dotenv`, `pydantic`, and `tabulate` to `requirements.txt`.
+
+Reason: LangChain provides the OpenAI chat model and structured-output chain, dotenv loads local configuration, Pydantic defines the schema, and tabulate supports dataframe head markdown output.
+
+### Documented standalone semantic agent
+
+Updated `README.md` and `.env.example` with semantic agent usage and optional `OPENAI_MODEL` configuration.
+
+Reason: The new agent should be discoverable and runnable before it is integrated into the app.
+
+### Installed semantic agent dependencies
+
+Installed the updated `requirements.txt` into `.venv`.
+
+Result: LangChain, LangChain OpenAI, OpenAI SDK, python-dotenv, Pydantic, and tabulate are installed.
+
+Reason: The standalone semantic agent needs these packages to build a structured-output OpenAI chain and render dataframe heads as markdown.
+
+### Verified semantic agent offline
+
+Compiled `app.py` and `agents/semantic_understanding.py`, instantiated the `SemanticUnderstanding` Pydantic model, and imported the new dependencies.
+
+Result: Compilation, schema construction, and dependency imports all succeeded.
+
+Reason: This validates the agent code shape without making a network call or spending API tokens.
+
+### Ran semantic agent live smoke test
+
+Called `generate_semantic_understanding()` with a tiny synthetic sales metadata payload and dataframe head.
+
+Result: The OpenAI/LangChain structured-output call succeeded and returned valid `SemanticUnderstanding` JSON with domain, entities, dimensions, metrics, goals, and suggested questions.
+
+Reason: This confirms the standalone agent can use the local OpenAI API key and return the exact schema needed for later integration.
