@@ -10,6 +10,10 @@ from typing import Any
 
 import pandas as pd
 import streamlit as st
+from agents.semantic_understanding import (
+    SemanticUnderstanding,
+    generate_semantic_understanding,
+)
 from pandas.api.types import (
     is_bool_dtype,
     is_datetime64_any_dtype,
@@ -20,6 +24,7 @@ from pandas.api.types import (
 METADATA_DIR = Path("artifacts") / "metadata"
 LATEST_METADATA_PATH = METADATA_DIR / "latest_metadata.json"
 METADATA_INDEX_PATH = METADATA_DIR / "metadata_index.json"
+SEMANTIC_DIR = Path("artifacts") / "semantic"
 LOG_DIR = Path("artifacts") / "logs"
 APP_LOG_PATH = LOG_DIR / "app.log"
 
@@ -219,6 +224,48 @@ def save_metadata(metadata: dict[str, Any]) -> Path:
     return metadata_path
 
 
+def semantic_path_for(metadata: dict[str, Any]) -> Path:
+    file_hash = str(metadata["file_sha256"])[:12]
+    dataset_slug = slugify_filename(str(metadata["source_file"]))
+    return SEMANTIC_DIR / f"{dataset_slug}_{file_hash}_semantic.json"
+
+
+def save_semantic_understanding(
+    metadata: dict[str, Any],
+    semantic_understanding: SemanticUnderstanding,
+) -> Path:
+    SEMANTIC_DIR.mkdir(parents=True, exist_ok=True)
+    semantic_path = semantic_path_for(metadata)
+    semantic_path.write_text(
+        semantic_understanding.model_dump_json(indent=2),
+        encoding="utf-8",
+    )
+    return semantic_path
+
+
+def render_list(label: str, values: list[str]) -> None:
+    st.markdown(f"**{label}**")
+    if values:
+        for value in values:
+            st.write(f"- {value}")
+    else:
+        st.caption("No values identified.")
+
+
+def render_semantic_understanding(result: SemanticUnderstanding) -> None:
+    st.markdown("**Dataset domain**")
+    st.write(result.dataset_domain)
+
+    left, right = st.columns(2)
+    with left:
+        render_list("Primary entities", result.primary_entities)
+        render_list("Important dimensions", result.important_dimensions)
+        render_list("Important metrics", result.important_metrics)
+    with right:
+        render_list("Analytical goals", result.analytical_goals)
+        render_list("Suggested questions", result.suggested_questions)
+
+
 def main() -> None:
     st.set_page_config(page_title="Smart AI Dashboarding", layout="wide")
 
@@ -276,7 +323,9 @@ def main() -> None:
     st.success(f"Loaded {metadata['row_count']} rows and {metadata['column_count']} columns.")
     st.caption(f"CSV parser used: {parser_used}")
 
-    tab_data, tab_columns, tab_metadata = st.tabs(["Data", "Columns", "Metadata"])
+    tab_data, tab_columns, tab_semantic, tab_metadata = st.tabs(
+        ["Data", "Columns", "Semantic Understanding", "Metadata"]
+    )
 
     with tab_data:
         st.subheader("Data Preview")
@@ -299,6 +348,61 @@ def main() -> None:
             use_container_width=True,
             hide_index=True,
         )
+
+    with tab_semantic:
+        st.subheader("What The App Understands")
+        st.caption(
+            "Generate a semantic summary from the saved metadata and the first rows "
+            "of the dataframe."
+        )
+
+        semantic_key = (
+            f"{metadata['source_file']}:{metadata['file_sha256']}:"
+            f"{hashlib.sha256(cleaned_description.encode('utf-8')).hexdigest()}"
+        )
+        existing_semantic = st.session_state.get("semantic_understanding")
+        existing_semantic_key = st.session_state.get("semantic_understanding_key")
+
+        if st.button("Generate semantic understanding", type="primary"):
+            df_head = df.head(5).to_markdown(index=False)
+            try:
+                with st.spinner("Asking the semantic understanding agent..."):
+                    semantic_result = generate_semantic_understanding(
+                        metadata=metadata,
+                        df_head=df_head,
+                    )
+                    semantic_path = save_semantic_understanding(metadata, semantic_result)
+            except Exception as exc:
+                logger.exception(
+                    "Semantic understanding failed: filename=%s",
+                    uploaded_file.name,
+                )
+                st.error(f"Could not generate semantic understanding: {exc}")
+                st.caption(f"Details were logged to `{APP_LOG_PATH}`.")
+            else:
+                st.session_state["semantic_understanding"] = semantic_result
+                st.session_state["semantic_understanding_key"] = semantic_key
+                st.session_state["semantic_understanding_path"] = semantic_path
+                logger.info(
+                    "Semantic understanding generated: filename=%s semantic_path=%s",
+                    uploaded_file.name,
+                    semantic_path,
+                )
+                st.success("Semantic understanding generated.")
+
+        if existing_semantic and existing_semantic_key == semantic_key:
+            semantic_path = st.session_state.get("semantic_understanding_path")
+            if semantic_path:
+                st.caption(f"Saved to `{semantic_path}`")
+            render_semantic_understanding(existing_semantic)
+            st.download_button(
+                "Download semantic understanding JSON",
+                data=existing_semantic.model_dump_json(indent=2),
+                file_name="semantic_understanding.json",
+                mime="application/json",
+            )
+        else:
+            st.info("Click the button to run the semantic understanding agent.")
 
     with tab_metadata:
         st.subheader("Stored Metadata")

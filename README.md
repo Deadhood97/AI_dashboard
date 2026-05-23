@@ -113,6 +113,8 @@ python -m agents.semantic_understanding --metadata artifacts\metadata\latest_met
 
 The agent reads `OPENAI_API_KEY` from `.env` and falls back to `VITE_OPENAI_API_KEY` for local compatibility. Set `OPENAI_MODEL` to override the default model.
 
+The Streamlit UI also includes a `Semantic Understanding` tab after CSV upload. Click `Generate semantic understanding` to run the agent against the uploaded dataset metadata and `df.head(5)`. The result is displayed in the app and saved to `artifacts/semantic/`.
+
 ## Source Briefs
 
 - `project-brief.md`

@@ -499,3 +499,41 @@ Called `generate_semantic_understanding()` with a tiny synthetic sales metadata 
 Result: The OpenAI/LangChain structured-output call succeeded and returned valid `SemanticUnderstanding` JSON with domain, entities, dimensions, metrics, goals, and suggested questions.
 
 Reason: This confirms the standalone agent can use the local OpenAI API key and return the exact schema needed for later integration.
+
+### Integrated semantic agent into Streamlit UI
+
+Added a `Semantic Understanding` tab that appears after CSV upload and includes a `Generate semantic understanding` button.
+
+Reason: The user should be able to see what the app semantically understood about the uploaded dataset before later dashboarding agents act on it.
+
+### Displayed semantic understanding output
+
+Rendered the agent's dataset domain, primary entities, important dimensions, important metrics, analytical goals, and suggested questions in the UI.
+
+Reason: Showing the structured output makes the app's interpretation transparent and easy for the user to inspect.
+
+### Persisted semantic understanding artifacts
+
+Added saving for semantic understanding JSON files under `artifacts/semantic/`, using the source CSV name and file hash.
+
+Reason: Semantic understanding should be traceable as its own generated artifact, just like metadata.
+
+### Added semantic agent UI error logging
+
+Logged semantic agent failures to `artifacts/logs/app.log` and showed a Streamlit error message if generation fails.
+
+Reason: OpenAI/API or parsing failures need a clear debugging path without exposing secrets.
+
+### Verified semantic UI integration
+
+Compiled `app.py` and `agents/semantic_understanding.py`, tested semantic artifact saving with a sample `SemanticUnderstanding` object, and checked that the running Streamlit server still returns HTTP 200.
+
+Result: The semantic UI integration compiles, generated semantic output can be saved under `artifacts/semantic/`, and the app remains reachable.
+
+Reason: This confirms the UI integration did not break the existing app before committing the change.
+
+### Reconsidered app file structure
+
+Noted that `app.py` began as a single-file MVP for speed, but the project now has enough behavior to justify splitting into coordinated modules.
+
+Reason: Upload parsing, metadata persistence, semantic artifacts, logging, and UI rendering now represent separate responsibilities.
