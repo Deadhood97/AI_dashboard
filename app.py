@@ -360,9 +360,6 @@ def main() -> None:
             f"{metadata['source_file']}:{metadata['file_sha256']}:"
             f"{hashlib.sha256(cleaned_description.encode('utf-8')).hexdigest()}"
         )
-        existing_semantic = st.session_state.get("semantic_understanding")
-        existing_semantic_key = st.session_state.get("semantic_understanding_key")
-
         if st.button("Generate semantic understanding", type="primary"):
             df_head = df.head(5).to_markdown(index=False)
             try:
@@ -389,6 +386,9 @@ def main() -> None:
                     semantic_path,
                 )
                 st.success("Semantic understanding generated.")
+
+        existing_semantic = st.session_state.get("semantic_understanding")
+        existing_semantic_key = st.session_state.get("semantic_understanding_key")
 
         if existing_semantic and existing_semantic_key == semantic_key:
             semantic_path = st.session_state.get("semantic_understanding_path")

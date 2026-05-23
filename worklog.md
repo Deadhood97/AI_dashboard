@@ -537,3 +537,62 @@ Reason: This confirms the UI integration did not break the existing app before c
 Noted that `app.py` began as a single-file MVP for speed, but the project now has enough behavior to justify splitting into coordinated modules.
 
 Reason: Upload parsing, metadata persistence, semantic artifacts, logging, and UI rendering now represent separate responsibilities.
+
+### Planned modular app structure
+
+Planned a refactor where `app.py` becomes a thin Streamlit coordinator and implementation details move into focused modules.
+
+Proposed structure:
+
+```text
+app.py
+core/config.py
+core/logging.py
+data/ingestion.py
+metadata/profiling.py
+metadata/storage.py
+semantic/storage.py
+ui/semantic.py
+agents/semantic_understanding.py
+```
+
+Responsibilities:
+
+- `app.py`: page setup, user flow, tab layout, and coordination.
+- `core/config.py`: shared artifact paths such as metadata, semantic output, and logs.
+- `core/logging.py`: app logger setup.
+- `data/ingestion.py`: CSV parser fallback logic.
+- `metadata/profiling.py`: column role inference, JSON-safe conversion, column analysis, and dataset metadata construction.
+- `metadata/storage.py`: metadata filenames, index updates, latest pointer, and save/load behavior.
+- `semantic/storage.py`: semantic understanding artifact paths and persistence.
+- `ui/semantic.py`: display helpers for semantic understanding output.
+- `agents/semantic_understanding.py`: LangChain/OpenAI semantic understanding agent.
+
+Dependency direction:
+
+```text
+app.py -> data / metadata / semantic / ui / agents
+data -> core logging
+metadata -> core config
+semantic -> core config and agents schema
+ui -> agents schema
+agents -> LangChain/OpenAI only
+```
+
+Rules:
+
+- Lower-level modules must not import `app.py`.
+- Storage modules should not import Streamlit.
+- Agent modules should not know about Streamlit session state.
+- UI modules should render objects but not call OpenAI directly.
+- Shared paths and logger setup should live outside `app.py` to prevent circular imports.
+
+Reason: This keeps imports one-directional, reduces circular dependency risk, and makes each behavior easier to test before adding more agents.
+
+### Fixed semantic output display bug
+
+Moved the semantic understanding session-state lookup to after the generate button handler in `app.py`.
+
+Result: When the user clicks `Generate semantic understanding`, the newly generated result should render immediately in the `Semantic Understanding` tab instead of showing the stale "Click the button" info message.
+
+Reason: The previous code read session state before updating it, so Streamlit showed the success message while the display block still saw the old empty state.
