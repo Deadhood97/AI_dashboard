@@ -1,0 +1,173 @@
+from __future__ import annotations
+
+import argparse
+import json
+import os
+from pathlib import Path
+
+import pandas as pd
+from langchain_core.prompts import ChatPromptTemplate
+from langchain_openai import ChatOpenAI
+from pydantic import BaseModel, Field
+
+from agents.semantic_understanding import (
+    DEFAULT_MODEL,
+    SemanticUnderstanding,
+    compact_json,
+    resolve_openai_api_key,
+)
+
+
+class DashboardMetricSpec(BaseModel):
+    name: str = Field(description="Short dashboard metric name.")
+    business_purpose: str = Field(description="Why this metric matters to a user.")
+    calculation: str = Field(description="Plain-language calculation description.")
+    output_key: str = Field(
+        description="Key in analysis_outputs where this metric result will be stored."
+    )
+    required_columns: list[str] = Field(
+        description="Columns needed to calculate this metric."
+    )
+
+
+class QuestionAnalysisSpec(BaseModel):
+    question: str = Field(description="Question from the semantic understanding.")
+    analysis_strategy: str = Field(
+        description="Plain-language description of how pandas should answer the question."
+    )
+    output_key: str = Field(
+        description="Key in analysis_outputs where this question's result will be stored."
+    )
+    required_columns: list[str] = Field(
+        description="Columns needed to answer the question."
+    )
+
+
+class AnalysisOutputSpec(BaseModel):
+    key: str = Field(description="Key used in the analysis_outputs dictionary.")
+    output_type: str = Field(
+        description="Expected output type, such as scalar, dataframe, series, or dictionary."
+    )
+    description: str = Field(description="What the output contains.")
+    render_hint: str = Field(
+        description="How the app or a future agent could render or use this output."
+    )
+
+
+class PandasMetricPlan(BaseModel):
+    agent_summary: str = Field(
+        description="Short explanation of what this metric plan is trying to calculate."
+    )
+    required_columns: list[str] = Field(
+        description="All dataframe columns required by the generated pandas code."
+    )
+    dashboard_metrics: list[DashboardMetricSpec] = Field(
+        description="General dashboard KPI metrics the code should calculate."
+    )
+    question_analyses: list[QuestionAnalysisSpec] = Field(
+        description="Analysis tasks mapped to the semantic agent's suggested questions."
+    )
+    analysis_outputs: list[AnalysisOutputSpec] = Field(
+        description="Structured description of every expected analysis_outputs entry."
+    )
+    pandas_code: str = Field(
+        description=(
+            "Executable pandas code. It must assume a dataframe named df already "
+            "exists and store all outputs in a dictionary named analysis_outputs."
+        )
+    )
+    assumptions: list[str] = Field(
+        description="Assumptions made because only df.head() and semantic understanding were provided."
+    )
+    limitations: list[str] = Field(
+        description="Known limitations or checks needed before executing the code."
+    )
+
+
+def build_metric_code_planner_chain(model: str | None = None):
+    api_key = resolve_openai_api_key()
+    llm = ChatOpenAI(
+        model=model or os.getenv("OPENAI_MODEL", DEFAULT_MODEL),
+        api_key=api_key,
+        temperature=0,
+    )
+    structured_llm = llm.with_structured_output(PandasMetricPlan)
+
+    prompt = ChatPromptTemplate.from_messages(
+        [
+            (
+                "system",
+                "You are a senior analytics engineer writing safe, deterministic "
+                "pandas analysis code. Generate code that helps answer the semantic "
+                "agent's suggested questions and computes generally useful dashboard "
+                "metrics. Use only pandas/numpy-style dataframe operations. Do not "
+                "read files, write files, call APIs, plot charts, mutate global state, "
+                "or use eval/exec. Assume a pandas dataframe named df already exists. "
+                "The code must create a dictionary named analysis_outputs and store "
+                "every table, series, or scalar result in that dictionary. Use only "
+                "columns that appear in df.head() or the semantic understanding. If "
+                "needed, include defensive column checks and date/numeric conversion. "
+                "When converting columns, create a working copy such as df_work and "
+                "use the converted columns in all downstream calculations. "
+                "Return a structured plan that other agents can read and an app can "
+                "render: dashboard metric specs, per-question analysis specs, output "
+                "specs, assumptions, limitations, and pandas code.",
+            ),
+            (
+                "human",
+                "Semantic understanding JSON:\n{semantic_json}\n\n"
+                "Dataframe head:\n{df_head}\n\n"
+                "Generate the pandas metric plan and code.",
+            ),
+        ]
+    )
+
+    return prompt | structured_llm
+
+
+def generate_metric_code_plan(
+    semantic_understanding: SemanticUnderstanding,
+    df_head: str,
+    model: str | None = None,
+) -> PandasMetricPlan:
+    chain = build_metric_code_planner_chain(model=model)
+    return chain.invoke(
+        {
+            "semantic_json": semantic_understanding.model_dump_json(indent=2),
+            "df_head": df_head,
+        }
+    )
+
+
+def load_semantic_understanding(path: Path) -> SemanticUnderstanding:
+    data = json.loads(path.read_text(encoding="utf-8"))
+    return SemanticUnderstanding.model_validate(data)
+
+
+def dataframe_head_markdown(csv_path: Path, rows: int = 5) -> str:
+    df = pd.read_csv(csv_path)
+    return df.head(rows).to_markdown(index=False)
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(
+        description="Generate pandas metric code from semantic understanding and CSV head."
+    )
+    parser.add_argument("--semantic", type=Path, required=True)
+    parser.add_argument("--csv", type=Path, required=True)
+    parser.add_argument("--rows", type=int, default=5)
+    parser.add_argument("--model", default=None)
+    args = parser.parse_args()
+
+    semantic_understanding = load_semantic_understanding(args.semantic)
+    df_head = dataframe_head_markdown(args.csv, rows=args.rows)
+    result = generate_metric_code_plan(
+        semantic_understanding=semantic_understanding,
+        df_head=df_head,
+        model=args.model,
+    )
+    print(result.model_dump_json(indent=2))
+
+
+if __name__ == "__main__":
+    main()

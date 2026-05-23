@@ -115,6 +115,16 @@ The agent reads `OPENAI_API_KEY` from `.env` and falls back to `VITE_OPENAI_API_
 
 The Streamlit UI also includes a `Semantic Understanding` tab after CSV upload. Click `Generate semantic understanding` to run the agent against the uploaded dataset metadata and `df.head(5)`. The result is displayed in the app and saved to `artifacts/semantic/`.
 
+## Standalone Metric Code Planner
+
+The second standalone agent lives in `agents/metric_code_planner.py`. It takes a saved semantic understanding JSON file plus `df.head()` from a CSV and returns a structured pandas metric plan.
+
+The output includes an agent summary, dashboard KPI specs, per-question analysis specs, output specs for future rendering, assumptions, limitations, and pandas code. The generated code assumes a dataframe named `df` already exists and stores outputs in a dictionary named `analysis_outputs`. It is not executed by the app yet.
+
+```powershell
+python -m agents.metric_code_planner --semantic artifacts\semantic\your_dataset_semantic.json --csv path\to\dataset.csv
+```
+
 ## Source Briefs
 
 - `project-brief.md`

@@ -620,3 +620,73 @@ Reason: Semantic understanding must correspond to the currently submitted datase
 Adjusted the submit-button logic so previously submitted results stay visible on Streamlit reruns until the file or description changes.
 
 Reason: Streamlit buttons are momentary, so the app needs to rely on session state after submission instead of hiding results when the button is no longer actively clicked.
+
+### Started metric code planner agent
+
+Added `agents/metric_code_planner.py` as a second standalone LangChain/OpenAI agent.
+
+Reason: The next analytical step is to convert semantic understanding and dataframe sample rows into pandas code that calculates useful metrics.
+
+### Defined metric code planner schema
+
+Added Pydantic models `MetricDefinition` and `PandasMetricPlan`.
+
+Result: The agent returns required columns, metric definitions, generated pandas code, expected output keys, assumptions, and limitations.
+
+Reason: Generated code should be inspectable and explainable before it is executed.
+
+### Added safety constraints to metric code prompt
+
+Instructed the agent to assume `df` already exists, create an `analysis_outputs` dictionary, avoid file/network/API calls, avoid charts, and avoid `eval` or `exec`.
+
+Reason: Code generation should remain deterministic and bounded before we add an execution layer.
+
+### Added metric code planner CLI
+
+Added a command-line interface that accepts a semantic understanding JSON file and CSV, then generates the metric code plan from `df.head()`.
+
+Reason: The agent can be tested independently before integration into Streamlit or a sandboxed execution runtime.
+
+### Documented metric code planner agent
+
+Updated `README.md` with the standalone command for the metric code planner.
+
+Reason: The new agent should be easy to discover and run from the project documentation.
+
+### Strengthened metric planner structured output
+
+Expanded the metric code planner output schema beyond raw code.
+
+New structured sections:
+
+- `agent_summary`
+- `dashboard_metrics`
+- `question_analyses`
+- `analysis_outputs`
+- `pandas_code`
+- `assumptions`
+- `limitations`
+
+Reason: The metric planner should behave like an intelligent agent whose output can be inspected, rendered by the app, and consumed by later agents.
+
+### Verified metric planner offline
+
+Compiled the metric planner module and inspected the `PandasMetricPlan` schema fields.
+
+Result: The schema contains `agent_summary`, `required_columns`, `dashboard_metrics`, `question_analyses`, `analysis_outputs`, `pandas_code`, `assumptions`, and `limitations`.
+
+Reason: This validates the structured contract without making an API call.
+
+### Ran metric planner live smoke test
+
+Called the metric planner with a tiny retail sales semantic understanding and dataframe head.
+
+Result: The OpenAI/LangChain structured-output call returned valid dashboard metric specs, question analyses, output specs, assumptions, limitations, and pandas code.
+
+Reason: This confirms the agent behaves as an intelligent structured planner rather than only returning raw code.
+
+### Tightened generated code instructions
+
+Updated the metric planner prompt so defensive column conversions should be performed on a working dataframe copy and used in downstream calculations.
+
+Reason: The live smoke test showed a possible mismatch where generated code converted a numeric column but still grouped on the original column.
