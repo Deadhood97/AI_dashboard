@@ -22,6 +22,7 @@ from agents.dashboard_planner import (
 from agents.metric_code_planner import (
     PandasMetricPlan,
     generate_metric_code_plan,
+    repair_metric_code_plan,
 )
 from agents.semantic_understanding import (
     SemanticUnderstanding,
@@ -367,6 +368,33 @@ def execute_metric_plan(df: pd.DataFrame, metric_plan: PandasMetricPlan) -> dict
     if not isinstance(analysis_outputs, dict):
         raise ValueError("Metric plan code must create analysis_outputs as a dictionary.")
     return analysis_outputs
+
+
+def generate_executable_metric_plan(
+    df: pd.DataFrame,
+    semantic_understanding: SemanticUnderstanding,
+    df_head: str,
+    max_repairs: int = 1,
+) -> tuple[PandasMetricPlan, dict[str, Any]]:
+    metric_plan = generate_metric_code_plan(
+        semantic_understanding=semantic_understanding,
+        df_head=df_head,
+    )
+    for attempt in range(max_repairs + 1):
+        try:
+            return metric_plan, execute_metric_plan(df, metric_plan)
+        except Exception as exc:
+            if attempt >= max_repairs:
+                raise
+            logger.info("Repairing metric plan after execution failure: %s", exc)
+            metric_plan = repair_metric_code_plan(
+                failed_plan=metric_plan,
+                semantic_understanding=semantic_understanding,
+                df_head=df_head,
+                error_message=f"{type(exc).__name__}: {exc}",
+            )
+
+    raise RuntimeError("Metric plan repair loop exited unexpectedly.")
 
 
 def output_to_dataframe(output: Any) -> pd.DataFrame:
@@ -782,11 +810,11 @@ def main() -> None:
             df_head = df.head(5).to_markdown(index=False)
             try:
                 with st.spinner("Planning metrics and dashboard views..."):
-                    metric_plan = generate_metric_code_plan(
+                    metric_plan, analysis_outputs = generate_executable_metric_plan(
+                        df=df,
                         semantic_understanding=existing_semantic,
                         df_head=df_head,
                     )
-                    analysis_outputs = execute_metric_plan(df, metric_plan)
                     metric_plan_path = save_metric_plan(metadata, metric_plan)
                     dashboard_plan = generate_dashboard_plan(
                         metadata=metadata,
@@ -796,11 +824,15 @@ def main() -> None:
                     )
                     dashboard_path = save_dashboard_plan(metadata, dashboard_plan)
             except Exception as exc:
+                metric_plan_path = locals().get("metric_plan_path")
                 logger.exception(
-                    "Dashboard generation failed: filename=%s",
+                    "Dashboard generation failed: filename=%s metric_plan_path=%s",
                     uploaded_file.name,
+                    metric_plan_path,
                 )
                 st.error(f"Could not generate dashboard: {exc}")
+                if metric_plan_path:
+                    st.caption(f"Metric plan was saved to `{metric_plan_path}` for debugging.")
                 st.caption(f"Details were logged to `{APP_LOG_PATH}`.")
             else:
                 st.session_state["dashboard_plan"] = dashboard_plan

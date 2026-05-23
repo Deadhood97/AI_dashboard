@@ -844,3 +844,35 @@ Compiled the app and agents, tested the constrained metric execution layer with 
 Result: The metric planner returned output specs with semantic roles and recommended views, and the dashboard planner returned chart specs with `source_output_key`, `x`, `y`, and ascending year sorting.
 
 Reason: This confirms the new agent-to-renderer contract can support smarter dashboard rendering than the earlier raw-data chart guessing approach.
+
+### Investigated dashboard generation failure
+
+Checked `artifacts/logs/app.log` after dashboard generation failed.
+
+Result: The failure occurred while executing generated metric planner pandas code, before dashboard planning. pandas raised `KeyError: [2025]`, which indicates generated code passed a data value such as a year into `dropna(subset=...)`, causing pandas to look for a column named `2025`.
+
+Reason: This is a code-generation guardrail issue in the metric planner, not a Plotly rendering issue.
+
+### Tightened metric code generation around `dropna`
+
+Updated the metric planner prompt so `dropna(subset=...)` may only contain dataframe column-name strings, never data values such as years or category labels.
+
+Reason: Year/category filters should use boolean masks such as `df_work["year"].isin([2024, 2025])`, then `dropna` should be applied only to required columns.
+
+### Saved metric plan before execution
+
+Changed the dashboard generation flow so the generated metric plan is saved before the app attempts to execute it.
+
+Result: If metric execution fails, the failed metric plan remains available under `artifacts/metric_plans/` for debugging.
+
+Reason: Execution failures need an inspectable artifact showing the exact generated code that failed.
+
+### Replaced hardcoded `dropna` guard with repair loop
+
+Removed the specific generated-code validator for `dropna(subset=[...])` because it was too narrowly tied to one pandas failure.
+
+Added `repair_metric_code_plan()`, which sends the failed plan, semantic understanding, dataframe head, and execution error back to the metric planner agent for correction.
+
+Result: Dashboard generation now attempts to generate a metric plan, execute it, and if execution fails, ask the agent to repair the full structured plan once before surfacing the error.
+
+Reason: The scope of possible pandas code failures is broad, so the system should use intelligent repair rather than accumulating one-off hardcoded checks.

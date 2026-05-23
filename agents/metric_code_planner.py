@@ -153,6 +153,13 @@ def build_metric_code_planner_chain(model: str | None = None):
                 "needed, include defensive column checks and date/numeric conversion. "
                 "When converting columns, create a working copy such as df_work and "
                 "use the converted columns in all downstream calculations. "
+                "When using dropna(subset=...), the subset list must contain only "
+                "real dataframe column-name strings, never data values such as years "
+                "or category labels. Filter year values with boolean masks such as "
+                "df_work['year'].isin([2024, 2025]), then use dropna only on required "
+                "columns like ['year', 'renewables_share_elec']. "
+                "When selecting multiple columns after groupby, use double brackets, "
+                "for example groupby_cols[['metric_a', 'metric_b']], not a tuple key. "
                 "Handle missing values intelligently instead of failing only because "
                 "NaN values exist. Choose and document a missing-data strategy for "
                 "each metric and question analysis. Prefer dropping rows only when "
@@ -196,6 +203,53 @@ def generate_metric_code_plan(
         {
             "semantic_json": semantic_understanding.model_dump_json(indent=2),
             "df_head": df_head,
+        }
+    )
+
+
+def repair_metric_code_plan(
+    failed_plan: PandasMetricPlan,
+    semantic_understanding: SemanticUnderstanding,
+    df_head: str,
+    error_message: str,
+    model: str | None = None,
+) -> PandasMetricPlan:
+    api_key = resolve_openai_api_key()
+    llm = ChatOpenAI(
+        model=model or os.getenv("OPENAI_MODEL", DEFAULT_MODEL),
+        api_key=api_key,
+        temperature=0,
+    )
+    structured_llm = llm.with_structured_output(PandasMetricPlan)
+    prompt = ChatPromptTemplate.from_messages(
+        [
+            (
+                "system",
+                "You repair pandas metric plans. The previous plan failed during "
+                "safe execution. Return a corrected complete PandasMetricPlan. "
+                "Preserve the original analytical intent, but fix the code and "
+                "structured output specs so they are internally consistent. Do not "
+                "read files, write files, call APIs, plot charts, use eval/exec, or "
+                "import modules. Assume df already exists. The code must create "
+                "analysis_outputs as a dictionary.",
+            ),
+            (
+                "human",
+                "Semantic understanding:\n{semantic_json}\n\n"
+                "Dataframe head:\n{df_head}\n\n"
+                "Failed metric plan:\n{failed_plan_json}\n\n"
+                "Execution error:\n{error_message}\n\n"
+                "Return the repaired metric plan.",
+            ),
+        ]
+    )
+    chain = prompt | structured_llm
+    return chain.invoke(
+        {
+            "semantic_json": semantic_understanding.model_dump_json(indent=2),
+            "df_head": df_head,
+            "failed_plan_json": failed_plan.model_dump_json(indent=2),
+            "error_message": error_message,
         }
     )
 
