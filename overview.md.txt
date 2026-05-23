@@ -1,0 +1,516 @@
+# Smart AI Dashboarding System — Project Overview
+
+## Objective
+
+Build an intelligent AI-powered analytics system capable of transforming arbitrary structured datasets into meaningful analytical dashboards automatically.
+
+The system should:
+
+1. Understand uploaded datasets and their business context.
+2. Identify meaningful analytical questions.
+3. Generate appropriate visualizations programmatically.
+4. Derive business insights from the generated analyses.
+5. Organize outputs into a coherent dashboard layout.
+6. Present the final dashboard to the user dynamically.
+7. Explain its reasoning transparently throughout the workflow.
+
+The goal is to simulate the workflow of a junior data analyst and dashboard designer using agent-based orchestration.
+
+---
+
+# Core Problem Statement
+
+Traditional dashboarding tools require:
+
+* manual KPI selection,
+* manual chart creation,
+* domain expertise,
+* and significant analyst effort.
+
+This project aims to reduce that manual effort by building an AI system that can:
+
+* reason about data semantically,
+* perform exploratory analytics autonomously,
+* generate dashboards dynamically from previously unseen datasets,
+* and explain the reasoning behind every analytical decision.
+
+---
+
+# High-Level Workflow
+
+## Step 1 — Dataset Upload
+
+The user uploads:
+
+* CSV dataset
+* optional dataset description/documentation
+
+The system ingests:
+
+* schema
+* metadata
+* sample rows
+* data distributions
+* null statistics
+* inferred datatypes
+
+---
+
+# Multi-Agent Pipeline
+
+## Agent 1 — Dataset Understanding Agent
+
+### Responsibility
+
+Interpret the uploaded dataset semantically.
+
+### Inputs
+
+* dataset schema
+* column statistics
+* dataset description
+
+### Outputs
+
+* semantic understanding of columns
+* inferred business domain
+* identified KPIs
+* possible entity relationships
+* temporal/categorical/numerical feature mapping
+
+### Example
+
+```plaintext
+order_date → temporal dimension
+sales → revenue metric
+customer_id → customer entity
+product_category → segmentation feature
+```
+
+### Explainability Responsibilities
+
+The agent should explain:
+
+* why columns were categorized a certain way
+* why specific fields are treated as KPIs
+* detected relationships between variables
+* inferred business domain
+
+### Example Reasoning
+
+```plaintext
+The column 'order_value' appears to represent a revenue metric because:
+- values are continuous numerical data
+- distribution resembles transaction values
+- associated with order identifiers
+```
+
+---
+
+## Agent 2 — Analytical Question Generation Agent
+
+### Responsibility
+
+Generate meaningful business and analytical questions that can be answered using the dataset.
+
+### Example Questions
+
+* Which categories contribute most to revenue?
+* Are there seasonal patterns?
+* Which customer segments are underperforming?
+* What trends or anomalies exist?
+* Which variables show strong relationships?
+
+### Outputs
+
+* prioritized analytical questions
+* suggested analysis paths
+
+This stage transforms the system from a visualization tool into an exploratory analytics engine.
+
+### Explainability Responsibilities
+
+The agent should explain:
+
+* why specific analytical questions matter
+* what business value each question provides
+* what patterns it expects to investigate
+
+### Example Reasoning
+
+```plaintext
+The system generated a seasonal trend analysis question because the dataset contains a timestamp column and multiple months of transactional data.
+```
+
+---
+
+## Agent 3 — Visualization & Code Generation Agent
+
+### Responsibility
+
+Generate Python analysis code and appropriate visualizations.
+
+### Tasks
+
+* write pandas/polars analysis code
+* generate aggregations
+* compute metrics
+* create charts dynamically
+* select visualization types intelligently
+
+### Outputs
+
+* executable Python code
+* visualization specifications
+* generated charts
+
+### Example
+
+```plaintext
+Question:
+Which categories generate the highest revenue?
+
+Output:
+Grouped revenue aggregation + bar chart visualization
+```
+
+### Explainability Responsibilities
+
+The agent should explain:
+
+* why a chart type was selected
+* why certain dimensions/measures were paired
+* what the visualization is intended to reveal
+* how the generated code answers the analytical question
+
+### Example Reasoning
+
+```plaintext
+A line chart was selected because the analysis involves a temporal trend over continuous time intervals.
+```
+
+---
+
+## Agent 4 — Insight Generation Agent
+
+### Responsibility
+
+Generate business-readable insights from generated analyses and visualizations.
+
+### Tasks
+
+* summarize trends
+* identify anomalies
+* correlate multiple metrics
+* explain findings in natural language
+
+### Example
+
+```plaintext
+Revenue increased 18% month-over-month, primarily driven by repeat purchases in the skincare category.
+```
+
+This stage focuses on generating narrative intelligence rather than raw analytics.
+
+### Explainability Responsibilities
+
+The agent should explain:
+
+* which metrics support the conclusion
+* what correlations or aggregations were used
+* confidence level of observations
+* possible limitations in interpretation
+
+### Example Reasoning
+
+```plaintext
+The revenue growth insight is based on month-over-month aggregation of transaction values grouped by product category.
+```
+
+---
+
+## Agent 5 — Dashboard Planning Agent
+
+### Responsibility
+
+Organize generated content into a coherent dashboard layout.
+
+### Tasks
+
+* prioritize important insights
+* determine chart hierarchy
+* structure dashboard sections
+* optimize information flow
+* group related analytics
+
+### Outputs
+
+* dashboard layout plan
+* component ordering
+* content grouping metadata
+
+The agent should mimic the reasoning of a BI dashboard designer.
+
+### Explainability Responsibilities
+
+The agent should explain:
+
+* why certain components were prioritized
+* why specific charts were placed prominently
+* how dashboard sections were grouped
+* why information hierarchy was selected
+
+### Example Reasoning
+
+```plaintext
+Revenue trend visualizations were placed at the top because they represent high-level business performance indicators.
+```
+
+---
+
+# Explainability & Reasoning Layer
+
+## Objective
+
+The system should not behave as a black-box dashboard generator.
+
+At every major stage of the pipeline, the system must explain:
+
+* what it is doing,
+* why it is doing it,
+* what assumptions it is making,
+* and how conclusions are derived.
+
+The goal is to create an interpretable and educational analytics workflow rather than a purely autonomous system.
+
+---
+
+# User Experience Goal
+
+The system should make users feel as though they are:
+
+* observing an AI analyst think,
+* understanding analytical reasoning,
+* and learning from the decision-making process.
+
+The platform should function both as:
+
+1. an autonomous analytics engine,
+2. and an educational analytics assistant.
+
+---
+
+# Transparency Principles
+
+The system should aim to:
+
+* expose intermediate reasoning steps,
+* avoid opaque conclusions,
+* surface uncertainty when appropriate,
+* and clearly distinguish:
+
+  * computed facts,
+  * inferred insights,
+  * and speculative observations.
+
+---
+
+# Final Application Layer
+
+The frontend application dynamically renders:
+
+* KPI cards
+* charts
+* insight summaries
+* grouped dashboard sections
+* filters/interactions
+* reasoning traces
+* analytical explanations
+
+based on the dashboard plan generated by the orchestration pipeline.
+
+---
+
+# Technical Architecture
+
+## Proposed Stack
+
+| Layer               | Technology               |
+| ------------------- | ------------------------ |
+| Frontend            | Streamlit                |
+| Backend             | Python                   |
+| Data Processing     | pandas / polars          |
+| Agent Orchestration | LangGraph                |
+| LLM Provider        | OpenAI API               |
+| Visualization       | Plotly                   |
+| Vector Search       | ChromaDB                 |
+| Storage             | SQLite                   |
+| Execution Layer     | Sandboxed Python Runtime |
+
+---
+
+# Key Engineering Challenges
+
+## 1. Generic Dataset Understanding
+
+The system must operate reliably on previously unseen datasets with inconsistent structures and naming conventions.
+
+---
+
+## 2. Reliable Code Generation
+
+Generated Python analysis code must:
+
+* execute safely,
+* remain deterministic,
+* and handle malformed data gracefully.
+
+---
+
+## 3. Visualization Selection
+
+The system must intelligently choose visualization types based on:
+
+* question intent,
+* datatype compatibility,
+* and analytical meaning.
+
+---
+
+## 4. Insight Quality
+
+Generated insights should:
+
+* be grounded in computed metrics,
+* avoid hallucinations,
+* and remain business-relevant.
+
+---
+
+## 5. Dashboard Coherence
+
+The final dashboard should feel intentionally designed rather than randomly assembled.
+
+---
+
+## 6. Explainability & Traceability
+
+The system should:
+
+* store reasoning artifacts,
+* expose analytical decision-making,
+* and maintain visibility into agent interactions.
+
+This includes:
+
+* generated questions
+* rejected hypotheses
+* chart selection rationale
+* aggregation logic
+* insight derivation steps
+* dashboard prioritization logic
+
+---
+
+# Long-Term Vision
+
+Potential future extensions:
+
+* conversational analytics
+* live database connections
+* autonomous exploratory analysis loops
+* dashboard editing via natural language
+* anomaly alerting
+* report generation
+* collaborative analytics
+* multi-dataset reasoning
+* agent memory and learning
+* explainable AI timelines
+* replayable reasoning sessions
+
+---
+
+# Primary Learning Goals
+
+This project is intended to develop practical skills in:
+
+* agentic AI systems
+* LLM orchestration
+* workflow design
+* AI-assisted analytics
+* code generation pipelines
+* dashboard engineering
+* structured reasoning systems
+* human-AI interaction patterns
+* explainable AI workflows
+* safe execution systems
+
+---
+
+# Success Criteria
+
+The project will be considered successful if the system can:
+
+1. Accept arbitrary structured datasets.
+2. Generate relevant analytical questions automatically.
+3. Produce meaningful visualizations dynamically.
+4. Generate coherent business insights.
+5. Assemble a usable dashboard with minimal human intervention.
+6. Explain its analytical reasoning transparently.
+7. Help users understand both the data and the system's thought process.
+
+---
+
+# Suggested MVP Scope
+
+## Initial MVP Features
+
+The first version of the system should support:
+
+* CSV upload
+* dataset profiling
+* automatic question generation
+* single-step analytical workflows
+* basic chart generation
+* insight summaries
+* explainability logs
+* simple dashboard layout generation
+
+The MVP should prioritize:
+
+* reliability
+* transparency
+* modular architecture
+* deterministic execution
+
+rather than full autonomy.
+
+---
+
+# Architectural Philosophy
+
+The system should separate:
+
+* reasoning
+* execution
+* visualization
+* orchestration
+
+LLMs should primarily:
+
+* reason,
+* plan,
+* and explain.
+
+Deterministic Python systems should:
+
+* execute calculations,
+* transform data,
+* and render outputs.
+
+This separation improves:
+
+* reliability
+* debuggability
+* explainability
+* and maintainability.
