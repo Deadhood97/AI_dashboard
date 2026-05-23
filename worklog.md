@@ -718,3 +718,69 @@ Ran a live metric planner smoke test with a dataframe head containing a missing 
 Result: The agent labeled missing categories as `Unknown`, dropped rows with missing sales for aggregation, added missingness information to `analysis_outputs`, and documented the strategy in the structured output.
 
 Reason: This confirms the planner can make explainable missing-value handling choices instead of simply throwing errors on NaN values.
+
+### Started dashboard planner agent
+
+Added `agents/dashboard_planner.py`, a standalone LangChain/OpenAI agent that returns a structured `DashboardPlan`.
+
+Reason: Dashboard layout and chart selection should be guided by an intelligent agent while remaining structured enough for the app and future agents to consume.
+
+### Defined dashboard plan schema
+
+Added structured models for dashboard KPIs, chart specs, question-answer views, and the overall dashboard plan.
+
+Result: The dashboard planner returns a title, summary, data integrity notes, KPI specs, overview chart specs, question views, assumptions, and limitations.
+
+Reason: Structured dashboard planning lets the app render safely without executing arbitrary LLM-generated code.
+
+### Added Plotly dependency
+
+Added `plotly` to `requirements.txt`.
+
+Reason: The dashboard renderer needs Plotly charts.
+
+### Added deterministic dashboard renderers
+
+Added Streamlit rendering helpers for data integrity metrics, KPI cards, grouped chart data, Plotly charts, and dashboard plan display.
+
+Reason: The agent should decide what to render, but deterministic app code should execute pandas/Plotly operations.
+
+### Added Dashboard tab
+
+Added a `Dashboard` tab that requires current semantic understanding, runs the dashboard planner on button click, saves the plan under `artifacts/dashboard/`, and renders the resulting dashboard.
+
+Reason: Users need to see a basic dashboard with integrity checks, major KPIs, and answers to semantic-agent questions.
+
+### Connected metric planner to dashboard planner
+
+Updated the dashboard planner so it now consumes `PandasMetricPlan` output from the metric code planner in addition to metadata, semantic understanding, and `df.head()`.
+
+Reason: The metric planner and dashboard planner should work together: one defines analytical computations and output specs, while the other decides how those planned outputs should appear in the dashboard.
+
+### Updated dashboard generation flow
+
+Changed the Streamlit Dashboard tab so `Generate dashboard` first runs the metric code planner, saves its structured output, then passes that metric plan into the dashboard planner.
+
+Result: Metric plans are saved under `artifacts/metric_plans/`, and dashboard plans are saved under `artifacts/dashboard/`.
+
+Reason: This avoids redundancy between agents and creates a clearer multi-agent pipeline.
+
+### Updated dashboard planner CLI
+
+Changed the dashboard planner CLI to require a saved metric plan JSON file.
+
+Reason: Standalone dashboard planning should use the same inputs as the app pipeline.
+
+### Verified dashboard planner pipeline
+
+Ran a live smoke test where semantic understanding was passed into the metric code planner, then the resulting metric plan was passed into the dashboard planner.
+
+Result: The pipeline returned a valid structured dashboard plan with KPI specs, overview chart specs, question views, assumptions, and limitations.
+
+Reason: This confirms the metric planner and dashboard planner can operate as a connected multi-agent workflow.
+
+### Tightened dashboard integrity grounding
+
+Updated the dashboard planner prompt so data integrity notes must be grounded in metadata or `df.head()` evidence.
+
+Reason: The live smoke test showed the planner could overstate missing-value issues when the synthetic metadata did not prove them.

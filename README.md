@@ -115,6 +115,18 @@ The agent reads `OPENAI_API_KEY` from `.env` and falls back to `VITE_OPENAI_API_
 
 The Streamlit UI also includes a `Semantic Understanding` tab after CSV upload. Click `Generate semantic understanding` to run the agent against the uploaded dataset metadata and `df.head(5)`. The result is displayed in the app and saved to `artifacts/semantic/`.
 
+## Dashboard Planner
+
+The dashboard planner lives in `agents/dashboard_planner.py`. It uses metadata, semantic understanding, the metric code planner output, and `df.head()` to produce a structured dashboard plan with data integrity notes, KPI specs, overview charts, and question-answer views.
+
+In the Streamlit UI, generate semantic understanding first, then open the `Dashboard` tab and click `Generate dashboard`. The app first runs the metric code planner, then passes that structured metric plan into the dashboard planner. It renders the dashboard with deterministic pandas and Plotly logic, saves metric plans to `artifacts/metric_plans/`, and saves dashboard plans to `artifacts/dashboard/`.
+
+Standalone dashboard planner usage requires a saved metric plan:
+
+```powershell
+python -m agents.dashboard_planner --metadata artifacts\metadata\latest_metadata.json --semantic artifacts\semantic\your_dataset_semantic.json --metric-plan artifacts\metric_plans\your_dataset_metric_plan.json --csv path\to\dataset.csv
+```
+
 ## Standalone Metric Code Planner
 
 The second standalone agent lives in `agents/metric_code_planner.py`. It takes a saved semantic understanding JSON file plus `df.head()` from a CSV and returns a structured pandas metric plan.

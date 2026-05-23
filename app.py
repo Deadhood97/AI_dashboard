@@ -9,7 +9,18 @@ from pathlib import Path
 from typing import Any
 
 import pandas as pd
+import plotly.express as px
 import streamlit as st
+from agents.dashboard_planner import (
+    DashboardChartSpec,
+    DashboardKpiSpec,
+    DashboardPlan,
+    generate_dashboard_plan,
+)
+from agents.metric_code_planner import (
+    PandasMetricPlan,
+    generate_metric_code_plan,
+)
 from agents.semantic_understanding import (
     SemanticUnderstanding,
     generate_semantic_understanding,
@@ -25,6 +36,8 @@ METADATA_DIR = Path("artifacts") / "metadata"
 LATEST_METADATA_PATH = METADATA_DIR / "latest_metadata.json"
 METADATA_INDEX_PATH = METADATA_DIR / "metadata_index.json"
 SEMANTIC_DIR = Path("artifacts") / "semantic"
+METRIC_PLAN_DIR = Path("artifacts") / "metric_plans"
+DASHBOARD_DIR = Path("artifacts") / "dashboard"
 LOG_DIR = Path("artifacts") / "logs"
 APP_LOG_PATH = LOG_DIR / "app.log"
 
@@ -243,6 +256,205 @@ def save_semantic_understanding(
     return semantic_path
 
 
+def metric_plan_path_for(metadata: dict[str, Any]) -> Path:
+    file_hash = str(metadata["file_sha256"])[:12]
+    dataset_slug = slugify_filename(str(metadata["source_file"]))
+    return METRIC_PLAN_DIR / f"{dataset_slug}_{file_hash}_metric_plan.json"
+
+
+def save_metric_plan(metadata: dict[str, Any], metric_plan: PandasMetricPlan) -> Path:
+    METRIC_PLAN_DIR.mkdir(parents=True, exist_ok=True)
+    metric_plan_path = metric_plan_path_for(metadata)
+    metric_plan_path.write_text(
+        metric_plan.model_dump_json(indent=2),
+        encoding="utf-8",
+    )
+    return metric_plan_path
+
+
+def dashboard_path_for(metadata: dict[str, Any]) -> Path:
+    file_hash = str(metadata["file_sha256"])[:12]
+    dataset_slug = slugify_filename(str(metadata["source_file"]))
+    return DASHBOARD_DIR / f"{dataset_slug}_{file_hash}_dashboard.json"
+
+
+def save_dashboard_plan(metadata: dict[str, Any], dashboard_plan: DashboardPlan) -> Path:
+    DASHBOARD_DIR.mkdir(parents=True, exist_ok=True)
+    dashboard_path = dashboard_path_for(metadata)
+    dashboard_path.write_text(
+        dashboard_plan.model_dump_json(indent=2),
+        encoding="utf-8",
+    )
+    return dashboard_path
+
+
+def data_integrity_summary(df: pd.DataFrame) -> dict[str, Any]:
+    total_cells = int(df.shape[0] * df.shape[1])
+    missing_cells = int(df.isna().sum().sum())
+    duplicate_rows = int(df.duplicated().sum())
+    missing_percentage = round((missing_cells / total_cells) * 100, 2) if total_cells else 0
+    return {
+        "row_count": int(len(df)),
+        "column_count": int(len(df.columns)),
+        "missing_cells": missing_cells,
+        "missing_percentage": missing_percentage,
+        "duplicate_rows": duplicate_rows,
+    }
+
+
+def render_data_integrity(df: pd.DataFrame, plan: DashboardPlan) -> None:
+    st.subheader("Data Integrity")
+    summary = data_integrity_summary(df)
+    cols = st.columns(5)
+    cols[0].metric("Rows", f"{summary['row_count']:,}")
+    cols[1].metric("Columns", f"{summary['column_count']:,}")
+    cols[2].metric("Missing Cells", f"{summary['missing_cells']:,}")
+    cols[3].metric("Missing %", f"{summary['missing_percentage']}%")
+    cols[4].metric("Duplicate Rows", f"{summary['duplicate_rows']:,}")
+
+    null_summary = (
+        df.isna()
+        .sum()
+        .reset_index()
+        .rename(columns={"index": "column", 0: "missing_values"})
+    )
+    null_summary = null_summary[null_summary["missing_values"] > 0]
+    if not null_summary.empty:
+        st.dataframe(null_summary, use_container_width=True, hide_index=True)
+    for note in plan.data_integrity_notes:
+        st.caption(note)
+
+
+def calculate_kpi(df: pd.DataFrame, spec: DashboardKpiSpec) -> Any:
+    if spec.column not in df.columns:
+        return "Missing column"
+
+    series = df[spec.column]
+    if spec.aggregation in {"sum", "mean", "median", "min", "max"}:
+        series = pd.to_numeric(series, errors="coerce")
+
+    aggregations = {
+        "sum": series.sum,
+        "mean": series.mean,
+        "median": series.median,
+        "count": series.count,
+        "nunique": series.nunique,
+        "min": series.min,
+        "max": series.max,
+    }
+    value = aggregations[spec.aggregation]()
+    if pd.isna(value):
+        return "N/A"
+    if isinstance(value, float):
+        return f"{value:,.2f}"
+    if isinstance(value, int):
+        return f"{value:,}"
+    return value
+
+
+def render_kpis(df: pd.DataFrame, plan: DashboardPlan) -> None:
+    st.subheader("Major KPIs")
+    if not plan.kpis:
+        st.info("No KPI cards were selected by the dashboard planner.")
+        return
+
+    cols = st.columns(min(len(plan.kpis), 4))
+    for index, spec in enumerate(plan.kpis):
+        with cols[index % len(cols)]:
+            st.metric(spec.title, calculate_kpi(df, spec))
+            st.caption(spec.rationale)
+
+
+def grouped_data(df: pd.DataFrame, spec: DashboardChartSpec) -> pd.DataFrame:
+    if not spec.dimension or spec.dimension not in df.columns:
+        return pd.DataFrame()
+
+    work = df.copy()
+    dimension = spec.dimension
+    metric = spec.metric
+    aggregation = spec.aggregation or "count"
+    work[dimension] = work[dimension].fillna("Unknown").astype(str)
+
+    if aggregation == "count" or not metric:
+        grouped = work.groupby(dimension).size().reset_index(name="count")
+        metric_name = "count"
+    elif metric in work.columns:
+        work[metric] = pd.to_numeric(work[metric], errors="coerce")
+        work = work.dropna(subset=[metric])
+        grouped = getattr(work.groupby(dimension)[metric], aggregation)().reset_index()
+        metric_name = metric
+    else:
+        return pd.DataFrame()
+
+    grouped = grouped.sort_values(metric_name, ascending=False)
+    if spec.top_n:
+        grouped = grouped.head(spec.top_n)
+    return grouped
+
+
+def render_chart(df: pd.DataFrame, spec: DashboardChartSpec) -> None:
+    st.markdown(f"**{spec.title}**")
+    st.caption(spec.rationale)
+
+    try:
+        if spec.chart_type == "bar":
+            chart_data = grouped_data(df, spec)
+            if chart_data.empty:
+                st.warning("Chart could not be rendered because required columns were unavailable.")
+                return
+            y_col = spec.metric if spec.metric in chart_data.columns else "count"
+            fig = px.bar(chart_data, x=spec.dimension, y=y_col, title=spec.title)
+            st.plotly_chart(fig, use_container_width=True)
+        elif spec.chart_type == "line":
+            chart_data = grouped_data(df, spec)
+            if chart_data.empty:
+                st.warning("Chart could not be rendered because required columns were unavailable.")
+                return
+            y_col = spec.metric if spec.metric in chart_data.columns else "count"
+            fig = px.line(chart_data, x=spec.dimension, y=y_col, markers=True, title=spec.title)
+            st.plotly_chart(fig, use_container_width=True)
+        elif spec.chart_type == "histogram" and spec.metric in df.columns:
+            values = pd.to_numeric(df[spec.metric], errors="coerce").dropna()
+            fig = px.histogram(values, x=spec.metric, title=spec.title)
+            st.plotly_chart(fig, use_container_width=True)
+        elif spec.chart_type == "scatter" and spec.dimension in df.columns and spec.metric in df.columns:
+            chart_data = df[[spec.dimension, spec.metric]].copy()
+            chart_data[spec.dimension] = pd.to_numeric(chart_data[spec.dimension], errors="coerce")
+            chart_data[spec.metric] = pd.to_numeric(chart_data[spec.metric], errors="coerce")
+            chart_data = chart_data.dropna()
+            fig = px.scatter(chart_data, x=spec.dimension, y=spec.metric, title=spec.title)
+            st.plotly_chart(fig, use_container_width=True)
+        elif spec.chart_type == "table":
+            chart_data = grouped_data(df, spec)
+            st.dataframe(chart_data if not chart_data.empty else df.head(20), use_container_width=True)
+        else:
+            st.warning("Chart type or required columns are not supported for this dataset.")
+    except Exception as exc:
+        logger.exception("Dashboard chart render failed: title=%s", spec.title)
+        st.warning(f"Could not render this chart: {exc}")
+
+
+def render_dashboard(df: pd.DataFrame, plan: DashboardPlan) -> None:
+    st.subheader(plan.dashboard_title)
+    st.write(plan.dashboard_summary)
+    render_data_integrity(df, plan)
+    render_kpis(df, plan)
+
+    st.subheader("Overview Charts")
+    for chart in plan.overview_charts:
+        render_chart(df, chart)
+
+    st.subheader("Answers To Analytical Questions")
+    for view in plan.question_views:
+        st.markdown(f"**{view.question}**")
+        st.write(view.answer_strategy)
+        render_chart(df, view.chart)
+
+    with st.expander("Dashboard assumptions and limitations"):
+        render_list("Assumptions", plan.assumptions)
+        render_list("Limitations", plan.limitations)
+
+
 def render_list(label: str, values: list[str]) -> None:
     st.markdown(f"**{label}**")
     if values:
@@ -306,6 +518,12 @@ def main() -> None:
         st.session_state.pop("semantic_understanding", None)
         st.session_state.pop("semantic_understanding_key", None)
         st.session_state.pop("semantic_understanding_path", None)
+        st.session_state.pop("metric_plan", None)
+        st.session_state.pop("metric_plan_key", None)
+        st.session_state.pop("metric_plan_path", None)
+        st.session_state.pop("dashboard_plan", None)
+        st.session_state.pop("dashboard_plan_key", None)
+        st.session_state.pop("dashboard_plan_path", None)
         st.session_state["submitted_dataset_key"] = None
 
     dataset_already_submitted = st.session_state.get("submitted_dataset_key") == dataset_key
@@ -363,8 +581,8 @@ def main() -> None:
     st.success(f"Loaded {metadata['row_count']} rows and {metadata['column_count']} columns.")
     st.caption(f"CSV parser used: {parser_used}")
 
-    tab_data, tab_columns, tab_semantic, tab_metadata = st.tabs(
-        ["Data", "Columns", "Semantic Understanding", "Metadata"]
+    tab_data, tab_columns, tab_semantic, tab_dashboard, tab_metadata = st.tabs(
+        ["Data", "Columns", "Semantic Understanding", "Dashboard", "Metadata"]
     )
 
     with tab_data:
@@ -443,6 +661,80 @@ def main() -> None:
             )
         else:
             st.info("Click the button to run the semantic understanding agent.")
+
+    with tab_dashboard:
+        st.subheader("Dataset Dashboard")
+        st.caption(
+            "Generate a basic dashboard from metadata, semantic understanding, "
+            "and safe pandas/Plotly renderers."
+        )
+
+        existing_semantic = st.session_state.get("semantic_understanding")
+        existing_semantic_key = st.session_state.get("semantic_understanding_key")
+        semantic_is_current = existing_semantic and existing_semantic_key == semantic_key
+        dashboard_key = (
+            f"{metadata['source_file']}:{metadata['file_sha256']}:"
+            f"{existing_semantic_key or 'no-semantic'}"
+        )
+
+        if not semantic_is_current:
+            st.info("Generate semantic understanding before creating the dashboard.")
+        elif st.button("Generate dashboard", type="primary"):
+            df_head = df.head(5).to_markdown(index=False)
+            try:
+                with st.spinner("Planning metrics and dashboard views..."):
+                    metric_plan = generate_metric_code_plan(
+                        semantic_understanding=existing_semantic,
+                        df_head=df_head,
+                    )
+                    metric_plan_path = save_metric_plan(metadata, metric_plan)
+                    dashboard_plan = generate_dashboard_plan(
+                        metadata=metadata,
+                        semantic_understanding=existing_semantic,
+                        metric_plan=metric_plan,
+                        df_head=df_head,
+                    )
+                    dashboard_path = save_dashboard_plan(metadata, dashboard_plan)
+            except Exception as exc:
+                logger.exception(
+                    "Dashboard generation failed: filename=%s",
+                    uploaded_file.name,
+                )
+                st.error(f"Could not generate dashboard: {exc}")
+                st.caption(f"Details were logged to `{APP_LOG_PATH}`.")
+            else:
+                st.session_state["dashboard_plan"] = dashboard_plan
+                st.session_state["dashboard_plan_key"] = dashboard_key
+                st.session_state["dashboard_plan_path"] = dashboard_path
+                st.session_state["metric_plan"] = metric_plan
+                st.session_state["metric_plan_key"] = dashboard_key
+                st.session_state["metric_plan_path"] = metric_plan_path
+                logger.info(
+                    "Dashboard generated: filename=%s metric_plan_path=%s dashboard_path=%s",
+                    uploaded_file.name,
+                    metric_plan_path,
+                    dashboard_path,
+                )
+                st.success("Dashboard generated.")
+
+        existing_dashboard = st.session_state.get("dashboard_plan")
+        existing_dashboard_key = st.session_state.get("dashboard_plan_key")
+        if semantic_is_current and existing_dashboard and existing_dashboard_key == dashboard_key:
+            dashboard_path = st.session_state.get("dashboard_plan_path")
+            metric_plan_path = st.session_state.get("metric_plan_path")
+            if metric_plan_path:
+                st.caption(f"Metric plan saved to `{metric_plan_path}`")
+            if dashboard_path:
+                st.caption(f"Dashboard plan saved to `{dashboard_path}`")
+            render_dashboard(df, existing_dashboard)
+            st.download_button(
+                "Download dashboard plan JSON",
+                data=existing_dashboard.model_dump_json(indent=2),
+                file_name="dashboard_plan.json",
+                mime="application/json",
+            )
+        elif semantic_is_current:
+            st.info("Click the button to generate the dashboard.")
 
     with tab_metadata:
         st.subheader("Stored Metadata")
