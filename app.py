@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -18,6 +19,7 @@ from pandas.api.types import (
 
 METADATA_DIR = Path("artifacts") / "metadata"
 LATEST_METADATA_PATH = METADATA_DIR / "latest_metadata.json"
+METADATA_INDEX_PATH = METADATA_DIR / "metadata_index.json"
 LOG_DIR = Path("artifacts") / "logs"
 APP_LOG_PATH = LOG_DIR / "app.log"
 
@@ -166,10 +168,55 @@ def build_dataset_metadata(
     }
 
 
+def slugify_filename(filename: str) -> str:
+    stem = Path(filename).stem.lower()
+    slug = re.sub(r"[^a-z0-9]+", "-", stem).strip("-")
+    return slug or "dataset"
+
+
+def metadata_path_for(metadata: dict[str, Any]) -> Path:
+    file_hash = str(metadata["file_sha256"])[:12]
+    dataset_slug = slugify_filename(str(metadata["source_file"]))
+    return METADATA_DIR / f"{dataset_slug}_{file_hash}.json"
+
+
+def update_metadata_index(metadata_path: Path, metadata: dict[str, Any]) -> None:
+    if METADATA_INDEX_PATH.exists():
+        index = json.loads(METADATA_INDEX_PATH.read_text(encoding="utf-8"))
+    else:
+        index = []
+
+    entry = {
+        "source_file": metadata["source_file"],
+        "metadata_file": str(metadata_path),
+        "file_sha256": metadata["file_sha256"],
+        "created_at": metadata["created_at"],
+        "row_count": metadata["row_count"],
+        "column_count": metadata["column_count"],
+    }
+
+    index = [
+        existing
+        for existing in index
+        if not (
+            existing.get("source_file") == entry["source_file"]
+            and existing.get("file_sha256") == entry["file_sha256"]
+        )
+    ]
+    index.append(entry)
+    METADATA_INDEX_PATH.write_text(json.dumps(index, indent=2), encoding="utf-8")
+
+
 def save_metadata(metadata: dict[str, Any]) -> Path:
     METADATA_DIR.mkdir(parents=True, exist_ok=True)
-    LATEST_METADATA_PATH.write_text(json.dumps(metadata, indent=2), encoding="utf-8")
-    return LATEST_METADATA_PATH
+    metadata_path = metadata_path_for(metadata)
+    metadata_json = json.dumps(metadata, indent=2)
+
+    metadata_path.write_text(metadata_json, encoding="utf-8")
+    LATEST_METADATA_PATH.write_text(metadata_json, encoding="utf-8")
+    update_metadata_index(metadata_path, metadata)
+
+    return metadata_path
 
 
 def main() -> None:
@@ -256,6 +303,7 @@ def main() -> None:
     with tab_metadata:
         st.subheader("Stored Metadata")
         st.caption(f"Saved to `{metadata_path}`")
+        st.caption(f"Metadata index: `{METADATA_INDEX_PATH}`")
         if cleaned_description:
             st.markdown("**Dataset description**")
             st.write(cleaned_description)

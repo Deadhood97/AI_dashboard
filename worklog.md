@@ -399,3 +399,49 @@ Compiled `app.py`, tested `build_dataset_metadata()` with a sample dataframe and
 Result: The generated metadata includes both `dataset_description` and `schema.description`, and `schema.columns` contains the inferred column metadata.
 
 Reason: This confirms the description is stored in the metadata contract that future semantic agents will consume.
+
+### Made metadata CSV-specific
+
+Updated metadata persistence so every CSV upload creates a separate metadata file in `artifacts/metadata/` named with the CSV filename, upload timestamp, and file hash.
+
+Reason: Metadata should not only live in `latest_metadata.json`; multiple uploaded CSVs need separate metadata artifacts that do not overwrite each other.
+
+### Added metadata index
+
+Added `artifacts/metadata/metadata_index.json`, which records each generated metadata file along with source filename, hash, creation time, row count, and column count.
+
+Reason: The app needs a simple catalog of uploaded dataset metadata files for later workflow and agent orchestration.
+
+### Kept latest metadata pointer
+
+Kept `artifacts/metadata/latest_metadata.json` as a convenience copy of the most recent metadata artifact.
+
+Reason: Some future development tasks may still benefit from a stable "latest upload" pointer, while the canonical per-upload metadata files preserve history.
+
+### Documented multi-file metadata behavior
+
+Updated `README.md` to explain the per-upload metadata files, metadata index, and latest metadata pointer.
+
+Reason: The metadata storage behavior changed and should be clear before we build agents on top of it.
+
+### Adjusted duplicate metadata behavior
+
+Changed metadata filenames to use CSV filename plus file hash, without the upload timestamp.
+
+Result: Uploading the same CSV file with the same name overwrites its existing metadata file, while changed files or different filenames still create separate metadata files.
+
+Reason: Re-uploading the exact same dataset should refresh that dataset's metadata instead of creating duplicate historical entries.
+
+### Made metadata index an upsert
+
+Updated the metadata index writer to replace an existing entry when `source_file` and `file_sha256` match.
+
+Reason: The index should mirror the overwrite behavior for identical file/name uploads instead of accumulating duplicate entries.
+
+### Verified duplicate metadata behavior
+
+Tested metadata saving with the same filename/hash twice and then with the same filename but a different hash.
+
+Result: The same filename/hash reused and overwrote one metadata file, while the changed hash created a second metadata file. The index contained two entries.
+
+Reason: This confirms the metadata store preserves separate datasets while avoiding duplicate artifacts for identical re-uploads.
