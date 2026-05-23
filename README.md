@@ -81,7 +81,9 @@ Start Streamlit:
 streamlit run app.py
 ```
 
-The current app supports CSV upload, dataframe preview, basic column type analysis, and generated metadata storage at `artifacts/metadata/latest_metadata.json`.
+The current app supports CSV upload, optional dataset description capture, dataframe preview, basic column type analysis, and generated metadata storage at `artifacts/metadata/latest_metadata.json`.
+
+The saved metadata includes a `schema` object with the user-provided dataset description and inferred column schema. This will be used later by the semantic understanding agent.
 
 Application logs are written to `artifacts/logs/app.log`. If a CSV upload fails, the UI shows the error and the log file records the exception details.
 

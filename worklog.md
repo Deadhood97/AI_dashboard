@@ -365,3 +365,37 @@ Pushed the local `main` branch to `origin/main`.
 Result: The local branch now tracks `origin/main` at `https://github.com/Deadhood97/AI_dashboard.git`.
 
 Reason: This completes the first sync between the local project and the GitHub repository.
+
+### Added dataset description input
+
+Added a Streamlit text area where the user can optionally describe the uploaded dataset's domain, source, and business context.
+
+Reason: User-provided dataset context will be important later for the semantic understanding agent because column names and datatypes alone may not explain the business meaning of the data.
+
+### Stored description in metadata schema
+
+Updated metadata generation so the cleaned dataset description is stored at `dataset_description` and inside a `schema` object alongside the inferred column schema.
+
+Result: `artifacts/metadata/latest_metadata.json` now contains both machine-inferred column metadata and user-provided dataset context.
+
+Reason: Keeping the description in the schema gives future agents a stable place to read semantic context.
+
+### Documented schema description support
+
+Updated `README.md` to mention dataset description capture and the saved `schema` object.
+
+Reason: The app behavior and metadata contract should be visible in project documentation.
+
+### Wrapped Streamlit UI in `main()`
+
+Moved Streamlit UI execution into a `main()` function guarded by `if __name__ == "__main__"`.
+
+Reason: This allows helper functions like metadata generation to be imported and tested without running the Streamlit interface.
+
+### Verified dataset description schema change
+
+Compiled `app.py`, tested `build_dataset_metadata()` with a sample dataframe and description, and checked that the running Streamlit server still returns HTTP 200.
+
+Result: The generated metadata includes both `dataset_description` and `schema.description`, and `schema.columns` contains the inferred column metadata.
+
+Reason: This confirms the description is stored in the metadata contract that future semantic agents will consume.

@@ -143,14 +143,26 @@ def analyze_columns(df: pd.DataFrame) -> list[dict[str, Any]]:
     return metadata
 
 
-def build_dataset_metadata(df: pd.DataFrame, filename: str, raw_bytes: bytes) -> dict[str, Any]:
+def build_dataset_metadata(
+    df: pd.DataFrame,
+    filename: str,
+    raw_bytes: bytes,
+    dataset_description: str,
+) -> dict[str, Any]:
+    columns = analyze_columns(df)
+
     return {
         "source_file": filename,
         "file_sha256": hashlib.sha256(raw_bytes).hexdigest(),
         "created_at": datetime.now(timezone.utc).isoformat(),
+        "dataset_description": dataset_description,
         "row_count": int(len(df)),
         "column_count": int(len(df.columns)),
-        "columns": analyze_columns(df),
+        "columns": columns,
+        "schema": {
+            "description": dataset_description,
+            "columns": columns,
+        },
     }
 
 
@@ -160,18 +172,33 @@ def save_metadata(metadata: dict[str, Any]) -> Path:
     return LATEST_METADATA_PATH
 
 
-st.set_page_config(page_title="Smart AI Dashboarding", layout="wide")
+def main() -> None:
+    st.set_page_config(page_title="Smart AI Dashboarding", layout="wide")
 
-st.title("Smart AI Dashboarding")
-st.caption("Upload a CSV to preview the data and generate basic column metadata.")
+    st.title("Smart AI Dashboarding")
+    st.caption("Upload a CSV to preview the data and generate basic column metadata.")
 
-uploaded_file = st.file_uploader("Upload CSV", type=["csv"])
+    dataset_description = st.text_area(
+        "Dataset description",
+        placeholder=(
+            "Optional: describe what this dataset represents, where it came from, "
+            "and what business process or domain it belongs to."
+        ),
+        help="This context is stored in the dataset schema for future semantic understanding agents.",
+    )
 
-if uploaded_file is None:
-    st.info("Upload a CSV file to begin.")
-else:
+    uploaded_file = st.file_uploader("Upload CSV", type=["csv"])
+
+    if uploaded_file is None:
+        st.info("Upload a CSV file to begin.")
+        return
+
     raw_bytes = uploaded_file.getvalue()
-    logger.info("CSV upload received: filename=%s size_bytes=%s", uploaded_file.name, len(raw_bytes))
+    logger.info(
+        "CSV upload received: filename=%s size_bytes=%s",
+        uploaded_file.name,
+        len(raw_bytes),
+    )
 
     try:
         df, parser_used = read_csv_with_fallbacks(uploaded_file)
@@ -181,14 +208,21 @@ else:
         st.caption(f"Details were logged to `{APP_LOG_PATH}`.")
         st.stop()
 
-    metadata = build_dataset_metadata(df, uploaded_file.name, raw_bytes)
+    cleaned_description = dataset_description.strip()
+    metadata = build_dataset_metadata(
+        df,
+        uploaded_file.name,
+        raw_bytes,
+        cleaned_description,
+    )
     st.session_state["dataset_metadata"] = metadata
     metadata_path = save_metadata(metadata)
     logger.info(
-        "CSV upload processed: filename=%s rows=%s columns=%s metadata_path=%s",
+        "CSV upload processed: filename=%s rows=%s columns=%s description_chars=%s metadata_path=%s",
         uploaded_file.name,
         metadata["row_count"],
         metadata["column_count"],
+        len(cleaned_description),
         metadata_path,
     )
 
@@ -222,6 +256,9 @@ else:
     with tab_metadata:
         st.subheader("Stored Metadata")
         st.caption(f"Saved to `{metadata_path}`")
+        if cleaned_description:
+            st.markdown("**Dataset description**")
+            st.write(cleaned_description)
         st.json(metadata)
         st.download_button(
             "Download metadata JSON",
@@ -229,3 +266,7 @@ else:
             file_name="dataset_metadata.json",
             mime="application/json",
         )
+
+
+if __name__ == "__main__":
+    main()
