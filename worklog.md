@@ -690,3 +690,31 @@ Reason: This confirms the agent behaves as an intelligent structured planner rat
 Updated the metric planner prompt so defensive column conversions should be performed on a working dataframe copy and used in downstream calculations.
 
 Reason: The live smoke test showed a possible mismatch where generated code converted a numeric column but still grouped on the original column.
+
+### Added intelligent missing-value handling to metric planner
+
+Updated `DashboardMetricSpec` and `QuestionAnalysisSpec` with a `missing_data_strategy` field.
+
+Reason: Downstream agents and the UI need to know how missing values were handled for each planned metric or analysis.
+
+### Strengthened metric planner NaN instructions
+
+Updated the metric planner prompt so generated pandas code should handle NaN values intelligently instead of failing only because missing values exist.
+
+Guidance added:
+
+- drop rows only when required values are missing for a specific aggregation
+- use numeric imputation such as 0, median, or mean only when analytically defensible
+- use mode or `Unknown` labels for missing categorical dimensions when useful
+- store missingness counts or data-quality notes in `analysis_outputs`
+- raise errors only for missing required columns or unusable data after cleaning
+
+Reason: Real datasets often contain missing values, and the analysis code should make explicit, explainable cleaning decisions rather than crash unnecessarily.
+
+### Verified NaN-aware metric planner behavior
+
+Ran a live metric planner smoke test with a dataframe head containing a missing category and missing sales value.
+
+Result: The agent labeled missing categories as `Unknown`, dropped rows with missing sales for aggregation, added missingness information to `analysis_outputs`, and documented the strategy in the structured output.
+
+Reason: This confirms the planner can make explainable missing-value handling choices instead of simply throwing errors on NaN values.

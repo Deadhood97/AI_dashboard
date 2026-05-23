@@ -28,6 +28,13 @@ class DashboardMetricSpec(BaseModel):
     required_columns: list[str] = Field(
         description="Columns needed to calculate this metric."
     )
+    missing_data_strategy: str = Field(
+        description=(
+            "How missing values should be handled for this metric, such as drop "
+            "invalid rows, fill numeric values with 0, median imputation, mode "
+            "imputation, or report missingness separately."
+        )
+    )
 
 
 class QuestionAnalysisSpec(BaseModel):
@@ -40,6 +47,9 @@ class QuestionAnalysisSpec(BaseModel):
     )
     required_columns: list[str] = Field(
         description="Columns needed to answer the question."
+    )
+    missing_data_strategy: str = Field(
+        description="How missing values should be handled for this question analysis."
     )
 
 
@@ -109,6 +119,17 @@ def build_metric_code_planner_chain(model: str | None = None):
                 "needed, include defensive column checks and date/numeric conversion. "
                 "When converting columns, create a working copy such as df_work and "
                 "use the converted columns in all downstream calculations. "
+                "Handle missing values intelligently instead of failing only because "
+                "NaN values exist. Choose and document a missing-data strategy for "
+                "each metric and question analysis. Prefer dropping rows only when "
+                "the required dimension or metric is missing for that specific "
+                "aggregation; use numeric imputation such as 0, median, or mean only "
+                "when it is analytically defensible; use mode or 'Unknown' labels "
+                "for missing categorical dimensions when that preserves useful "
+                "segmentation. Store missingness counts or data-quality notes in "
+                "analysis_outputs when missing values may affect interpretation. "
+                "Raise errors only for missing required columns or completely "
+                "unusable data after cleaning. "
                 "Return a structured plan that other agents can read and an app can "
                 "render: dashboard metric specs, per-question analysis specs, output "
                 "specs, assumptions, limitations, and pandas code.",

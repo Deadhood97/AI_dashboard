@@ -119,7 +119,7 @@ The Streamlit UI also includes a `Semantic Understanding` tab after CSV upload. 
 
 The second standalone agent lives in `agents/metric_code_planner.py`. It takes a saved semantic understanding JSON file plus `df.head()` from a CSV and returns a structured pandas metric plan.
 
-The output includes an agent summary, dashboard KPI specs, per-question analysis specs, output specs for future rendering, assumptions, limitations, and pandas code. The generated code assumes a dataframe named `df` already exists and stores outputs in a dictionary named `analysis_outputs`. It is not executed by the app yet.
+The output includes an agent summary, dashboard KPI specs, per-question analysis specs, missing-data strategies, output specs for future rendering, assumptions, limitations, and pandas code. The generated code assumes a dataframe named `df` already exists and stores outputs in a dictionary named `analysis_outputs`. It is not executed by the app yet.
 
 ```powershell
 python -m agents.metric_code_planner --semantic artifacts\semantic\your_dataset_semantic.json --csv path\to\dataset.csv
