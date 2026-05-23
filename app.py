@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import ast
 import json
 import logging
 import re
@@ -10,6 +11,7 @@ from typing import Any
 
 import pandas as pd
 import plotly.express as px
+import numpy as np
 import streamlit as st
 from agents.dashboard_planner import (
     DashboardChartSpec,
@@ -302,6 +304,93 @@ def data_integrity_summary(df: pd.DataFrame) -> dict[str, Any]:
     }
 
 
+def sanitize_generated_code(code: str) -> str:
+    allowed_imports = {"import pandas as pd", "import numpy as np"}
+    lines = []
+    for line in code.splitlines():
+        if line.strip() in allowed_imports:
+            continue
+        lines.append(line)
+    return "\n".join(lines)
+
+
+def validate_generated_code(code: str) -> None:
+    tree = ast.parse(code)
+    blocked_names = {"open", "exec", "eval", "compile", "__import__", "input"}
+    blocked_roots = {"os", "sys", "subprocess", "socket", "requests", "pathlib", "shutil"}
+
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Import, ast.ImportFrom)):
+            raise ValueError("Generated code may not import modules.")
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
+            if node.func.id in blocked_names:
+                raise ValueError(f"Generated code may not call {node.func.id}.")
+        if isinstance(node, ast.Attribute):
+            if node.attr.startswith("__"):
+                raise ValueError("Generated code may not access dunder attributes.")
+            root = node
+            while isinstance(root, ast.Attribute):
+                root = root.value
+            if isinstance(root, ast.Name) and root.id in blocked_roots:
+                raise ValueError(f"Generated code may not access {root.id}.")
+
+
+def execute_metric_plan(df: pd.DataFrame, metric_plan: PandasMetricPlan) -> dict[str, Any]:
+    code = sanitize_generated_code(metric_plan.pandas_code)
+    validate_generated_code(code)
+    safe_builtins = {
+        "ValueError": ValueError,
+        "TypeError": TypeError,
+        "Exception": Exception,
+        "len": len,
+        "range": range,
+        "sorted": sorted,
+        "list": list,
+        "dict": dict,
+        "set": set,
+        "tuple": tuple,
+        "int": int,
+        "float": float,
+        "str": str,
+        "bool": bool,
+        "sum": sum,
+        "min": min,
+        "max": max,
+        "abs": abs,
+        "round": round,
+        "enumerate": enumerate,
+    }
+    globals_dict = {"__builtins__": safe_builtins, "pd": pd, "np": np}
+    locals_dict: dict[str, Any] = {"df": df.copy()}
+    exec(compile(code, "<metric_plan>", "exec"), globals_dict, locals_dict)
+    analysis_outputs = locals_dict.get("analysis_outputs")
+    if not isinstance(analysis_outputs, dict):
+        raise ValueError("Metric plan code must create analysis_outputs as a dictionary.")
+    return analysis_outputs
+
+
+def output_to_dataframe(output: Any) -> pd.DataFrame:
+    if isinstance(output, pd.DataFrame):
+        return output.copy()
+    if isinstance(output, pd.Series):
+        return output.reset_index()
+    if isinstance(output, dict):
+        return pd.DataFrame([output])
+    if isinstance(output, (list, tuple)):
+        return pd.DataFrame(output)
+    return pd.DataFrame({"value": [output]})
+
+
+def format_value(value: Any) -> str:
+    if pd.isna(value):
+        return "N/A"
+    if isinstance(value, (float, np.floating)):
+        return f"{float(value):,.2f}"
+    if isinstance(value, (int, np.integer)):
+        return f"{int(value):,}"
+    return str(value)
+
+
 def render_data_integrity(df: pd.DataFrame, plan: DashboardPlan) -> None:
     st.subheader("Data Integrity")
     summary = data_integrity_summary(df)
@@ -325,14 +414,30 @@ def render_data_integrity(df: pd.DataFrame, plan: DashboardPlan) -> None:
         st.caption(note)
 
 
-def calculate_kpi(df: pd.DataFrame, spec: DashboardKpiSpec) -> Any:
-    if spec.column not in df.columns:
-        return "Missing column"
+def calculate_kpi(analysis_outputs: dict[str, Any], spec: DashboardKpiSpec) -> str:
+    if spec.source_output_key not in analysis_outputs:
+        return "Missing output"
+    output = analysis_outputs[spec.source_output_key]
+    if isinstance(output, (int, float, str, np.integer, np.floating)):
+        return format_value(output)
+    if isinstance(output, dict):
+        if spec.value_column and spec.value_column in output:
+            return format_value(output[spec.value_column])
+        numeric_values = [value for value in output.values() if isinstance(value, (int, float, np.integer, np.floating))]
+        return format_value(numeric_values[0]) if numeric_values else str(output)
 
-    series = df[spec.column]
+    table = output_to_dataframe(output)
+    if table.empty:
+        return "N/A"
+    if spec.value_column and spec.value_column in table.columns:
+        series = table[spec.value_column]
+    else:
+        numeric_columns = table.select_dtypes(include="number").columns
+        series = table[numeric_columns[0]] if len(numeric_columns) else table.iloc[:, -1]
+
     if spec.aggregation in {"sum", "mean", "median", "min", "max"}:
         series = pd.to_numeric(series, errors="coerce")
-
+    aggregation = spec.aggregation or "count"
     aggregations = {
         "sum": series.sum,
         "mean": series.mean,
@@ -342,17 +447,10 @@ def calculate_kpi(df: pd.DataFrame, spec: DashboardKpiSpec) -> Any:
         "min": series.min,
         "max": series.max,
     }
-    value = aggregations[spec.aggregation]()
-    if pd.isna(value):
-        return "N/A"
-    if isinstance(value, float):
-        return f"{value:,.2f}"
-    if isinstance(value, int):
-        return f"{value:,}"
-    return value
+    return format_value(aggregations[aggregation]())
 
 
-def render_kpis(df: pd.DataFrame, plan: DashboardPlan) -> None:
+def render_kpis(analysis_outputs: dict[str, Any], plan: DashboardPlan) -> None:
     st.subheader("Major KPIs")
     if not plan.kpis:
         st.info("No KPI cards were selected by the dashboard planner.")
@@ -361,94 +459,94 @@ def render_kpis(df: pd.DataFrame, plan: DashboardPlan) -> None:
     cols = st.columns(min(len(plan.kpis), 4))
     for index, spec in enumerate(plan.kpis):
         with cols[index % len(cols)]:
-            st.metric(spec.title, calculate_kpi(df, spec))
+            st.metric(spec.title, calculate_kpi(analysis_outputs, spec))
             st.caption(spec.rationale)
 
 
-def grouped_data(df: pd.DataFrame, spec: DashboardChartSpec) -> pd.DataFrame:
-    if not spec.dimension or spec.dimension not in df.columns:
-        return pd.DataFrame()
-
-    work = df.copy()
-    dimension = spec.dimension
-    metric = spec.metric
-    aggregation = spec.aggregation or "count"
-    work[dimension] = work[dimension].fillna("Unknown").astype(str)
-
-    if aggregation == "count" or not metric:
-        grouped = work.groupby(dimension).size().reset_index(name="count")
-        metric_name = "count"
-    elif metric in work.columns:
-        work[metric] = pd.to_numeric(work[metric], errors="coerce")
-        work = work.dropna(subset=[metric])
-        grouped = getattr(work.groupby(dimension)[metric], aggregation)().reset_index()
-        metric_name = metric
-    else:
-        return pd.DataFrame()
-
-    grouped = grouped.sort_values(metric_name, ascending=False)
+def sorted_chart_data(chart_data: pd.DataFrame, spec: DashboardChartSpec) -> pd.DataFrame:
+    if chart_data.empty:
+        return chart_data
+    sort_by = spec.sort_by or spec.x or spec.dimension
+    if sort_by and sort_by in chart_data.columns:
+        ascending = spec.sort_order == "ascending"
+        chart_data = chart_data.sort_values(sort_by, ascending=ascending)
     if spec.top_n:
-        grouped = grouped.head(spec.top_n)
-    return grouped
+        chart_data = chart_data.head(spec.top_n)
+    return chart_data
 
 
-def render_chart(df: pd.DataFrame, spec: DashboardChartSpec) -> None:
+def render_chart(analysis_outputs: dict[str, Any], spec: DashboardChartSpec) -> None:
     st.markdown(f"**{spec.title}**")
     st.caption(spec.rationale)
+    if spec.source_output_key not in analysis_outputs:
+        st.warning(f"Missing analysis output: {spec.source_output_key}")
+        return
+
+    chart_data = sorted_chart_data(output_to_dataframe(analysis_outputs[spec.source_output_key]), spec)
 
     try:
-        if spec.chart_type == "bar":
-            chart_data = grouped_data(df, spec)
-            if chart_data.empty:
-                st.warning("Chart could not be rendered because required columns were unavailable.")
+        x = spec.x or spec.dimension
+        y = spec.y or spec.metric
+        if spec.chart_type == "bar" and x in chart_data.columns and y in chart_data.columns:
+            if spec.orientation == "horizontal":
+                fig = px.bar(chart_data, x=y, y=x, orientation="h", title=spec.title)
+            else:
+                fig = px.bar(chart_data, x=x, y=y, color=spec.color if spec.color in chart_data.columns else None, title=spec.title)
+            st.plotly_chart(fig, use_container_width=True)
+        elif spec.chart_type in {"line", "multi_line"} and x in chart_data.columns:
+            y_value: str | list[str] | None = y if y in chart_data.columns else None
+            if not y_value and spec.metrics:
+                y_value = [metric for metric in spec.metrics if metric in chart_data.columns]
+            if not y_value:
+                st.dataframe(chart_data, use_container_width=True)
                 return
-            y_col = spec.metric if spec.metric in chart_data.columns else "count"
-            fig = px.bar(chart_data, x=spec.dimension, y=y_col, title=spec.title)
+            fig = px.line(
+                chart_data,
+                x=x,
+                y=y_value,
+                color=spec.color if spec.color in chart_data.columns else None,
+                markers=True,
+                title=spec.title,
+            )
             st.plotly_chart(fig, use_container_width=True)
-        elif spec.chart_type == "line":
-            chart_data = grouped_data(df, spec)
-            if chart_data.empty:
-                st.warning("Chart could not be rendered because required columns were unavailable.")
-                return
-            y_col = spec.metric if spec.metric in chart_data.columns else "count"
-            fig = px.line(chart_data, x=spec.dimension, y=y_col, markers=True, title=spec.title)
+        elif spec.chart_type == "histogram" and y in chart_data.columns:
+            fig = px.histogram(chart_data, x=y, title=spec.title)
             st.plotly_chart(fig, use_container_width=True)
-        elif spec.chart_type == "histogram" and spec.metric in df.columns:
-            values = pd.to_numeric(df[spec.metric], errors="coerce").dropna()
-            fig = px.histogram(values, x=spec.metric, title=spec.title)
+        elif spec.chart_type == "scatter" and x in chart_data.columns and y in chart_data.columns:
+            fig = px.scatter(
+                chart_data,
+                x=x,
+                y=y,
+                color=spec.color if spec.color in chart_data.columns else None,
+                title=spec.title,
+            )
             st.plotly_chart(fig, use_container_width=True)
-        elif spec.chart_type == "scatter" and spec.dimension in df.columns and spec.metric in df.columns:
-            chart_data = df[[spec.dimension, spec.metric]].copy()
-            chart_data[spec.dimension] = pd.to_numeric(chart_data[spec.dimension], errors="coerce")
-            chart_data[spec.metric] = pd.to_numeric(chart_data[spec.metric], errors="coerce")
-            chart_data = chart_data.dropna()
-            fig = px.scatter(chart_data, x=spec.dimension, y=spec.metric, title=spec.title)
-            st.plotly_chart(fig, use_container_width=True)
-        elif spec.chart_type == "table":
-            chart_data = grouped_data(df, spec)
-            st.dataframe(chart_data if not chart_data.empty else df.head(20), use_container_width=True)
+        elif spec.chart_type in {"table", "text", "kpi"}:
+            st.dataframe(chart_data, use_container_width=True, hide_index=True)
         else:
-            st.warning("Chart type or required columns are not supported for this dataset.")
+            st.warning("Chart spec did not match available output columns. Showing table instead.")
+            st.dataframe(chart_data, use_container_width=True, hide_index=True)
     except Exception as exc:
         logger.exception("Dashboard chart render failed: title=%s", spec.title)
         st.warning(f"Could not render this chart: {exc}")
+        st.dataframe(chart_data, use_container_width=True, hide_index=True)
 
 
-def render_dashboard(df: pd.DataFrame, plan: DashboardPlan) -> None:
+def render_dashboard(df: pd.DataFrame, plan: DashboardPlan, analysis_outputs: dict[str, Any]) -> None:
     st.subheader(plan.dashboard_title)
     st.write(plan.dashboard_summary)
     render_data_integrity(df, plan)
-    render_kpis(df, plan)
+    render_kpis(analysis_outputs, plan)
 
     st.subheader("Overview Charts")
     for chart in plan.overview_charts:
-        render_chart(df, chart)
+        render_chart(analysis_outputs, chart)
 
     st.subheader("Answers To Analytical Questions")
     for view in plan.question_views:
         st.markdown(f"**{view.question}**")
         st.write(view.answer_strategy)
-        render_chart(df, view.chart)
+        render_chart(analysis_outputs, view.chart)
 
     with st.expander("Dashboard assumptions and limitations"):
         render_list("Assumptions", plan.assumptions)
@@ -521,6 +619,7 @@ def main() -> None:
         st.session_state.pop("metric_plan", None)
         st.session_state.pop("metric_plan_key", None)
         st.session_state.pop("metric_plan_path", None)
+        st.session_state.pop("analysis_outputs", None)
         st.session_state.pop("dashboard_plan", None)
         st.session_state.pop("dashboard_plan_key", None)
         st.session_state.pop("dashboard_plan_path", None)
@@ -687,6 +786,7 @@ def main() -> None:
                         semantic_understanding=existing_semantic,
                         df_head=df_head,
                     )
+                    analysis_outputs = execute_metric_plan(df, metric_plan)
                     metric_plan_path = save_metric_plan(metadata, metric_plan)
                     dashboard_plan = generate_dashboard_plan(
                         metadata=metadata,
@@ -709,6 +809,7 @@ def main() -> None:
                 st.session_state["metric_plan"] = metric_plan
                 st.session_state["metric_plan_key"] = dashboard_key
                 st.session_state["metric_plan_path"] = metric_plan_path
+                st.session_state["analysis_outputs"] = analysis_outputs
                 logger.info(
                     "Dashboard generated: filename=%s metric_plan_path=%s dashboard_path=%s",
                     uploaded_file.name,
@@ -726,7 +827,11 @@ def main() -> None:
                 st.caption(f"Metric plan saved to `{metric_plan_path}`")
             if dashboard_path:
                 st.caption(f"Dashboard plan saved to `{dashboard_path}`")
-            render_dashboard(df, existing_dashboard)
+            analysis_outputs = st.session_state.get("analysis_outputs")
+            if not isinstance(analysis_outputs, dict):
+                st.warning("Analysis outputs are missing. Regenerate the dashboard.")
+            else:
+                render_dashboard(df, existing_dashboard, analysis_outputs)
             st.download_button(
                 "Download dashboard plan JSON",
                 data=existing_dashboard.model_dump_json(indent=2),

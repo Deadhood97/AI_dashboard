@@ -784,3 +784,63 @@ Reason: This confirms the metric planner and dashboard planner can operate as a 
 Updated the dashboard planner prompt so data integrity notes must be grounded in metadata or `df.head()` evidence.
 
 Reason: The live smoke test showed the planner could overstate missing-value issues when the synthetic metadata did not prove them.
+
+### Audited generated dashboard output
+
+Reviewed the generated renewable-energy dashboard plan, metric plan, semantic understanding, metadata, app renderer logic, and app logs.
+
+Findings:
+
+- Timeline charts are rendered from grouped data sorted by metric value, not by year, so time can appear out of order instead of left-to-right chronologically.
+- Country-specific trend questions are collapsed into a single aggregated line because the renderer only supports `dimension` and `metric`, not a series/color column such as `country`.
+- Multi-metric questions such as solar plus wind are split into separate single-metric charts, or only one metric is rendered, because chart specs only support one metric.
+- Some dashboard KPIs do not match their stated rationale. For example, "Countries at 100% Renewable" uses a raw count of `country`, not a filtered count for countries reaching 100% renewable electricity in 2024-2025.
+- Correlation is planned as a table with `metric=gdp`, but the renderer does not calculate correlation, so the dashboard cannot actually answer that question.
+- Table views with filters, such as countries at 100% renewable electricity in 2024-2025, are rendered as generic grouped tables rather than applying the required threshold/year filters.
+- The metric code planner creates useful named outputs, but the app does not execute or consume those outputs yet. The dashboard renderer recomputes simple charts directly from the dataframe, losing the richer analysis logic.
+- The dashboard planner asks for analyses like "US, China, India, Germany", but the chart spec does not include filters, so the renderer cannot apply those selections.
+
+Reason: The current dashboard generation is useful as a first prototype, but the agent plan and renderer contract are not expressive enough for time series, filtered views, multi-series charts, or computed answers.
+
+### Upgraded metric-output render contract
+
+Expanded metric planner `AnalysisOutputSpec` with `semantic_role`, `columns`, and `recommended_views`.
+
+Reason: Dashboard planning needs to know whether each output is a scalar, ranked table, time series, entity time series, categorical comparison, correlation pair, distribution, raw table, or data-quality output.
+
+### Upgraded dashboard chart contract
+
+Added dashboard fields for `source_output_key`, `x`, `y`, `color`, `metrics`, `sort_by`, `sort_order`, and `orientation`.
+
+Reason: The dashboard renderer needs explicit references to computed analysis outputs and enough display metadata to render timelines left-to-right, multi-line entity trends, scalar KPIs, and table fallbacks intelligently.
+
+### Added constrained metric-plan execution
+
+Added a local execution layer for metric planner pandas code.
+
+Safety constraints:
+
+- strips allowed pandas/numpy import lines and blocks all other imports
+- blocks dangerous calls such as `open`, `exec`, `eval`, `compile`, `__import__`, and `input`
+- blocks access to common filesystem/network/process modules
+- provides a restricted builtins dictionary
+- executes against a copy of the dataframe
+- requires generated code to create an `analysis_outputs` dictionary
+
+Reason: The dashboard needs to render the metric planner's named outputs, but generated code must be executed through guardrails.
+
+### Switched dashboard renderer to analysis outputs
+
+Changed KPI and chart rendering so dashboard specs read from `analysis_outputs` using `source_output_key`.
+
+Result: The renderer can now support scalar outputs, dataframe outputs, series outputs, dictionaries, multi-line charts with `color`, multi-metric line charts, sorted timelines, and table fallbacks.
+
+Reason: Rendering from planned outputs preserves the intelligence of the metric planner instead of recomputing shallow charts from raw dataframe columns.
+
+### Verified upgraded dashboard contract
+
+Compiled the app and agents, tested the constrained metric execution layer with a handcrafted metric plan, checked the running Streamlit server, and ran a live planner smoke test.
+
+Result: The metric planner returned output specs with semantic roles and recommended views, and the dashboard planner returned chart specs with `source_output_key`, `x`, `y`, and ascending year sorting.
+
+Reason: This confirms the new agent-to-renderer contract can support smarter dashboard rendering than the earlier raw-data chart guessing approach.

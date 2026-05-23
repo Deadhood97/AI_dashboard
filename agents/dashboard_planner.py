@@ -21,26 +21,59 @@ from agents.metric_code_planner import PandasMetricPlan
 
 
 Aggregation = Literal["sum", "mean", "median", "count", "nunique", "min", "max"]
-ChartType = Literal["bar", "line", "histogram", "scatter", "table"]
+ChartType = Literal[
+    "bar",
+    "line",
+    "multi_line",
+    "histogram",
+    "scatter",
+    "table",
+    "kpi",
+    "text",
+]
+SortOrder = Literal["ascending", "descending"]
+Orientation = Literal["vertical", "horizontal"]
 
 
 class DashboardKpiSpec(BaseModel):
     title: str = Field(description="Short user-facing KPI title.")
-    column: str = Field(description="Column used to compute the KPI.")
-    aggregation: Aggregation = Field(description="Aggregation used for the KPI.")
+    source_output_key: str = Field(
+        description="Metric plan analysis_outputs key used to render the KPI."
+    )
+    value_column: str | None = Field(
+        default=None,
+        description="Column or dictionary field to use when the output is not scalar.",
+    )
+    aggregation: Aggregation | None = Field(
+        default=None,
+        description="Optional aggregation to use when the output is tabular.",
+    )
     rationale: str = Field(description="Why this KPI belongs on the dashboard.")
 
 
 class DashboardChartSpec(BaseModel):
     title: str = Field(description="Short chart title.")
     chart_type: ChartType = Field(description="Allowed Plotly chart type.")
+    source_output_key: str = Field(
+        description="Metric plan analysis_outputs key used as the chart data source."
+    )
+    x: str | None = Field(default=None, description="X-axis column.")
+    y: str | None = Field(default=None, description="Y-axis column.")
+    color: str | None = Field(
+        default=None,
+        description="Optional series/color column for grouped or multi-line views.",
+    )
+    metrics: list[str] = Field(
+        default_factory=list,
+        description="Optional list of metric columns for wide-form multi-metric charts.",
+    )
     dimension: str | None = Field(
         default=None,
-        description="Dimension column for grouping, x-axis, or categories.",
+        description="Deprecated compatibility field for grouping, x-axis, or categories.",
     )
     metric: str | None = Field(
         default=None,
-        description="Metric column for aggregation, y-axis, or numeric distribution.",
+        description="Deprecated compatibility field for metric, y-axis, or distribution.",
     )
     aggregation: Aggregation | None = Field(
         default=None,
@@ -50,6 +83,9 @@ class DashboardChartSpec(BaseModel):
         default=10,
         description="Optional row/category limit for readability.",
     )
+    sort_by: str | None = Field(default=None, description="Column to sort by before rendering.")
+    sort_order: SortOrder = Field(default="descending", description="Sort direction.")
+    orientation: Orientation = Field(default="vertical", description="Chart orientation.")
     question: str | None = Field(
         default=None,
         description="Analytical question this chart helps answer.",
@@ -107,6 +143,13 @@ def build_dashboard_planner_chain(model: str | None = None):
                 "Use the metric plan's dashboard metrics, question analyses, and "
                 "analysis output specs as the primary source for what the dashboard "
                 "should calculate and display. "
+                "Every KPI, overview chart, and question chart must reference a "
+                "source_output_key that exists in the metric plan analysis_outputs. "
+                "Use x, y, color, metrics, sort_by, sort_order, and orientation to "
+                "describe how to render the referenced output. For timelines, put "
+                "time on the x-axis and set sort_order to ascending. For country or "
+                "entity trend comparisons, use chart_type multi_line or line with a "
+                "color column. For scalar outputs, use KPI or text views. "
                 "Ground data integrity notes only in evidence from metadata or "
                 "df.head(); do not claim missing values, duplicates, outliers, or "
                 "type problems unless the provided context supports that claim. "

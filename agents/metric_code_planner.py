@@ -8,6 +8,8 @@ from pathlib import Path
 import pandas as pd
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_openai import ChatOpenAI
+from typing import Literal
+
 from pydantic import BaseModel, Field
 
 from agents.semantic_understanding import (
@@ -16,6 +18,29 @@ from agents.semantic_understanding import (
     compact_json,
     resolve_openai_api_key,
 )
+
+OutputRole = Literal[
+    "scalar",
+    "ranked_table",
+    "time_series",
+    "time_series_by_entity",
+    "categorical_comparison",
+    "correlation_pair",
+    "distribution",
+    "raw_table",
+    "data_quality",
+]
+
+RecommendedView = Literal[
+    "kpi_card",
+    "bar_chart",
+    "line_chart",
+    "multi_line_chart",
+    "scatter_plot",
+    "histogram",
+    "table",
+    "text_insight",
+]
 
 
 class DashboardMetricSpec(BaseModel):
@@ -57,6 +82,15 @@ class AnalysisOutputSpec(BaseModel):
     key: str = Field(description="Key used in the analysis_outputs dictionary.")
     output_type: str = Field(
         description="Expected output type, such as scalar, dataframe, series, or dictionary."
+    )
+    semantic_role: OutputRole = Field(
+        description="Analytical shape of this output for downstream dashboard planning."
+    )
+    columns: list[str] = Field(
+        description="Expected columns or value fields present in this output."
+    )
+    recommended_views: list[RecommendedView] = Field(
+        description="Supported visual views that would fit this output."
     )
     description: str = Field(description="What the output contains.")
     render_hint: str = Field(
@@ -130,6 +164,12 @@ def build_metric_code_planner_chain(model: str | None = None):
                 "analysis_outputs when missing values may affect interpretation. "
                 "Raise errors only for missing required columns or completely "
                 "unusable data after cleaning. "
+                "For every analysis_outputs entry, provide semantic_role, columns, "
+                "and recommended_views so dashboard agents can render it without "
+                "guessing. For time series by entity, output a dataframe with a time "
+                "column, value column, and entity column. For multi-metric trends, "
+                "prefer tidy long-form outputs with columns like year, metric_name, "
+                "metric_value, and optional entity. "
                 "Return a structured plan that other agents can read and an app can "
                 "render: dashboard metric specs, per-question analysis specs, output "
                 "specs, assumptions, limitations, and pandas code.",

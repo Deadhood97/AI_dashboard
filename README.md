@@ -119,7 +119,7 @@ The Streamlit UI also includes a `Semantic Understanding` tab after CSV upload. 
 
 The dashboard planner lives in `agents/dashboard_planner.py`. It uses metadata, semantic understanding, the metric code planner output, and `df.head()` to produce a structured dashboard plan with data integrity notes, KPI specs, overview charts, and question-answer views.
 
-In the Streamlit UI, generate semantic understanding first, then open the `Dashboard` tab and click `Generate dashboard`. The app first runs the metric code planner, then passes that structured metric plan into the dashboard planner. It renders the dashboard with deterministic pandas and Plotly logic, saves metric plans to `artifacts/metric_plans/`, and saves dashboard plans to `artifacts/dashboard/`.
+In the Streamlit UI, generate semantic understanding first, then open the `Dashboard` tab and click `Generate dashboard`. The app first runs the metric code planner, executes the generated pandas analysis in a constrained local executor, then passes the structured metric plan into the dashboard planner. Dashboard views reference named `analysis_outputs`, which lets the renderer handle timelines, multi-line entity trends, tables, scalar KPIs, and fallback views more reliably. Metric plans are saved to `artifacts/metric_plans/`, and dashboard plans are saved to `artifacts/dashboard/`.
 
 Standalone dashboard planner usage requires a saved metric plan:
 
