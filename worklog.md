@@ -1708,3 +1708,110 @@ Safe migration plan:
 6. Keep Streamlit available behind an internal/dev command until the React frontend is stable.
 
 Reason: The UI should become a product-grade analytical workspace while the proven Python agent pipeline remains intact. Separating frontend and backend gives us design freedom without destabilizing data generation.
+
+### UI overhaul priority ladder
+
+Divided the product UI overhaul into implementation priority levels.
+
+Critical:
+
+- Establish a stable frontend-facing API contract over existing artifacts.
+- Keep Streamlit working while a new frontend is developed.
+- Do not change generation behavior yet.
+- Expose runs, latest run bundle, dashboard plan, validation, insights, and notebook data through read-only endpoints.
+- Add tests so a future React/Next.js frontend does not depend on private Streamlit state.
+
+High:
+
+- Build a Next.js + React + TypeScript product shell.
+- Add an app frame with left rail, top status bar, run history, and main workspace.
+- Render existing dashboard plans from API payloads.
+- Render notebook/audit trail from API notebook JSON.
+- Add frontend chart guards for invalid specs, missing data, clipped scales, zero-only bars, and sample-size caveats.
+
+Medium:
+
+- Add generation actions to the frontend.
+- Introduce job status polling for semantic, metric, dashboard, critic, analytical brain, and notebook steps.
+- Add richer history and artifact comparison.
+- Improve chart interaction: tooltips, sorting, table fallback, value labels, export controls.
+
+Low:
+
+- Visual refinement, transitions, empty states, keyboard shortcuts, command palette, theme tokens, and polish.
+- Replace Streamlit fully only after the new frontend covers current workflows.
+
+### Implemented critical UI-overhaul foundation
+
+Implemented the critical first slice: a read-only FastAPI contract over current artifacts.
+
+Changes made:
+
+- Added `api.py`.
+  - `GET /api/health`
+  - `GET /api/runs`
+  - `GET /api/runs/latest`
+  - `GET /api/runs/{run_id}`
+  - `GET /api/runs/{run_id}/notebook`
+- Added `ArtifactStore` abstraction so tests can use temporary artifact roots.
+- Added typed response models:
+  - `ArtifactStatus`
+  - `RunSummary`
+  - `RunBundle`
+- Added CORS for local frontend development on `localhost:3000`.
+- Added `fastapi` and `uvicorn` to `requirements.txt`.
+- Added `tests/test_api_contracts.py`.
+
+Verification:
+
+- `python -m unittest tests.test_api_contracts` passes.
+- `python -m py_compile api.py` passes.
+
+Reason: A product-grade frontend needs stable artifact APIs before we build visual surfaces. This keeps the UI overhaul decoupled from agent execution and reduces the chance of breaking the current app.
+
+### Documentation priority ladder
+
+Classified documentation work into the same priority model as the UI overhaul.
+
+Critical:
+
+- Rewrite `README.md` so a beginner can understand, install, run, and troubleshoot the project.
+- Add a detailed introduction page explaining objective, architecture, agent communication, artifacts, validation, notebook audit trail, and UI-overhaul direction.
+- Include setup commands for Streamlit, FastAPI, tests, Kaggle, and notebook feature flag.
+
+High:
+
+- Add API reference documentation with example payloads.
+- Add agent schema reference for each structured input/output model.
+- Add dashboard validation rule reference.
+- Add notebook artifact guide.
+
+Medium:
+
+- Add contributor guide.
+- Add troubleshooting guide with known errors and fixes.
+- Add end-to-end example walkthroughs using saved Kaggle datasets.
+- Add architecture decision records for major design choices.
+
+Low:
+
+- Add screenshots, demo GIFs, polished diagrams, branding copy, and a docs site.
+
+### Implemented critical documentation foundation
+
+Implemented the critical documentation slice.
+
+Changes made:
+
+- Rewrote `README.md` as a beginner-friendly guide.
+  - Explains what Dashboard Studio does.
+  - Includes project structure.
+  - Includes setup and run instructions.
+  - Includes `.env`, OpenAI, Kaggle, notebook flag, Streamlit, FastAPI, tests, artifacts, and troubleshooting.
+  - Explains current branches and development direction.
+- Added `docs/project-introduction.md`.
+  - Covers objective, product promise, architecture, agent workflow, artifact flow, validation, notebook purpose, UI-overhaul direction, and success criteria.
+  - Includes Mermaid diagrams for pipeline flow, agent communication, artifact flow, and future frontend architecture.
+  - Includes UI-overhaul and documentation priority ladders.
+
+Reason: The project has grown from a simple Streamlit prototype into a multi-agent analytics system. The docs need to help beginners run it while also helping future contributors understand the architecture.

@@ -8,3 +8,5 @@ pydantic
 tabulate
 plotly
 nbformat
+fastapi
+uvicorn

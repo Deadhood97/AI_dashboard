@@ -1,151 +1,601 @@
-# Smart AI Dashboarding System
+# Dashboard Studio
 
-An AI-powered analytics application that turns uploaded CSV datasets into explainable dashboards. The system is designed to behave like a junior data analyst: profile the dataset, infer structure and business context, generate analytical questions, create visualizations, derive grounded insights, and arrange the results into a coherent dashboard.
+Dashboard Studio is an AI-assisted analytics app that turns a CSV dataset into:
 
-## MVP Goals
+- a profiled dataset summary
+- semantic understanding of the data
+- generated pandas analysis code
+- validated dashboard charts and KPIs
+- analytical insights
+- a Jupyter notebook-style audit trail
+- saved artifacts that can be restored later
 
-- Accept arbitrary CSV uploads.
-- Profile datasets and infer schema/datatype information.
-- Generate useful analytical questions automatically.
-- Create basic Plotly visualizations from deterministic computations.
-- Summarize insights from computed metrics.
-- Show explainability logs for each major workflow step.
-- Produce a simple dashboard layout with KPI cards, charts, insight summaries, filters, and reasoning traces.
+The easiest way to think about it:
 
-## Recommended Stack
+> You give the app a dataset. The app behaves like a cautious junior data analyst: it studies the columns, writes analysis code, executes that code locally, validates the results, builds a dashboard, and explains what happened.
 
-| Layer | Technology |
+This project is currently in an active prototype-to-product transition. The existing app runs in Streamlit. A new product frontend is being planned on the `ui-overhaul` branch, backed by a FastAPI artifact API.
+
+---
+
+## Who This README Is For
+
+This guide is written for beginners. You do not need to know the whole codebase to run the app.
+
+You should be comfortable with:
+
+- opening a terminal
+- copying commands
+- editing a `.env` file
+
+If you are new to Python virtual environments, that is okay. Follow the setup steps exactly.
+
+---
+
+## What The App Does
+
+Dashboard Studio can:
+
+1. Load a CSV file from upload or Kaggle.
+2. Profile the dataset.
+3. Infer column roles, metrics, dimensions, and analytical goals.
+4. Generate pandas code for useful analyses.
+5. Execute generated code in a constrained local sandbox.
+6. Validate the dashboard plan before rendering.
+7. Ask a critic agent to repair weak dashboard plans.
+8. Generate an analytical narrative.
+9. Save outputs as JSON artifacts.
+10. Generate a notebook artifact that shows the analysis process step by step.
+
+---
+
+## Current Tech Stack
+
+| Layer | Current Tooling |
 | --- | --- |
-| Frontend | Streamlit |
-| Backend | Python |
-| Data Processing | pandas / polars |
-| Agent Orchestration | LangGraph |
-| LLM Provider | OpenAI API |
+| App UI | Streamlit |
+| API for future frontend | FastAPI |
+| Data processing | pandas, numpy |
 | Visualization | Plotly |
-| Storage | SQLite |
-| Vector Search | ChromaDB |
-| Execution Layer | Sandboxed Python Runtime |
+| LLM orchestration | LangChain structured output |
+| LLM provider | OpenAI |
+| Dataset import | CSV upload, Kaggle API |
+| Notebook artifact | nbformat |
+| Testing | unittest, Streamlit AppTest, FastAPI TestClient |
 
-## Architecture Principles
+Planned frontend stack for the UI overhaul:
 
-- Keep LLM reasoning separate from deterministic execution.
-- Use Python code for profiling, cleaning, aggregations, metric computation, and chart rendering.
-- Use LLMs for semantic interpretation, planning, explanation, and business-readable narratives.
-- Store traceable artifacts such as generated questions, chart rationale, aggregation logic, rejected hypotheses, insight derivations, and dashboard layout decisions.
-- Clearly label computed facts, inferred insights, and speculative observations.
+- Next.js
+- React
+- TypeScript
+- Tailwind CSS
+- Radix UI or shadcn/ui
+- TanStack Query
+- ECharts, Vega-Lite, or Plotly.js
 
-## Planned Agent Workflow
+---
 
-1. Dataset Understanding Agent: infer domain, semantic column meanings, KPIs, feature types, and entity relationships.
-2. Analytical Question Generation Agent: create prioritized questions that can be answered from the dataset.
-3. Visualization and Code Generation Agent: generate executable analysis code, aggregations, Plotly charts, and chart rationale.
-4. Insight Generation Agent: convert computed results into business-readable insights with limitations and confidence notes.
-5. Dashboard Planning Agent: organize components into a coherent dashboard layout and explain the information hierarchy.
+## Project Structure
 
-## Local Configuration
+```text
+.
+|-- app.py                         # Streamlit app
+|-- api.py                         # FastAPI read-only artifact API
+|-- dashboard_validation.py         # Dashboard and chart validation rules
+|-- notebook_export.py              # Builds .ipynb audit notebooks
+|-- requirements.txt                # Python dependencies
+|-- worklog.md                      # Running project worklog
+|-- agents/
+|   |-- semantic_understanding.py   # Semantic dataset understanding agent
+|   |-- metric_code_planner.py      # Generates pandas metric plans/code
+|   |-- dashboard_planner.py        # Creates dashboard structure
+|   |-- dashboard_critic.py         # Repairs weak dashboard plans
+|   |-- analytical_brain.py         # Produces final insights
+|-- docs/
+|   |-- dashboard-design-guide.md
+|   |-- project-introduction.md
+|-- tests/
+|   |-- test_*.py
+|-- artifacts/                      # Generated local outputs, ignored by git
+|   |-- metadata/
+|   |-- datasets/
+|   |-- semantic/
+|   |-- metric_plans/
+|   |-- dashboard/
+|   |-- critiques/
+|   |-- insights/
+|   |-- notebooks/
+|   |-- logs/
+```
 
-Create a local `.env` file from the example:
+The `artifacts/` folder is created by the app. It stores generated files locally and should not be committed.
+
+---
+
+## Quick Start
+
+### 1. Open A Terminal In The Project Folder
+
+Example path:
+
+```powershell
+cd "C:\Users\Lord Vader\Documents\AI dashboaring"
+```
+
+### 2. Create A Python Virtual Environment
+
+```powershell
+py -3.12 -m venv .venv
+```
+
+If `py -3.12` does not work, try:
+
+```powershell
+python -m venv .venv
+```
+
+### 3. Activate The Virtual Environment
+
+```powershell
+.\.venv\Scripts\Activate.ps1
+```
+
+If PowerShell blocks activation, run:
+
+```powershell
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
+.\.venv\Scripts\Activate.ps1
+```
+
+### 4. Install Dependencies
+
+```powershell
+python -m pip install -r requirements.txt
+```
+
+### 5. Create Your Local Environment File
 
 ```powershell
 Copy-Item .env.example .env
 ```
 
-Then add your OpenAI API key:
+Open `.env` and add your OpenAI API key:
 
 ```text
-OPENAI_API_KEY=your_api_key_here
+OPENAI_API_KEY=your_key_here
 ```
 
-If your local environment already uses `VITE_OPENAI_API_KEY`, the backend can be configured to fall back to that value during development.
+Never commit `.env`.
 
-Do not commit `.env` or real credentials.
-
-## Run The MVP App
-
-Create and activate a project virtual environment:
-
-```powershell
-py -3.12 -m venv .venv
-.\.venv\Scripts\Activate.ps1
-```
-
-Install dependencies inside the virtual environment:
-
-```powershell
-pip install -r requirements.txt
-```
-
-Start Streamlit:
+### 6. Run The Streamlit App
 
 ```powershell
 streamlit run app.py
 ```
 
-The current app supports CSV upload or direct Kaggle dataset import, optional dataset description capture, explicit dataset submission, dataframe preview, basic column type analysis, and generated metadata storage in `artifacts/metadata/`.
+Open the URL Streamlit prints, usually:
 
-To import from Kaggle, configure Kaggle authentication with one of the official options:
+```text
+http://localhost:8501
+```
+
+---
+
+## Optional: Enable Notebook View
+
+The notebook view is feature-flagged.
+
+In `.env`:
+
+```text
+ENABLE_NOTEBOOK_VIEW=true
+```
+
+When enabled, the app shows a `Notebook` tab after dashboard artifacts exist.
+
+The notebook:
+
+- shows dataset context
+- shows semantic understanding
+- shows generated pandas code
+- shows executed metric outputs
+- shows dashboard plan and validation
+- shows analytical brain output
+- can be downloaded as `.ipynb`
+
+Notebook generation is non-blocking. If notebook export fails, the dashboard should still work.
+
+---
+
+## Optional: Kaggle Dataset Import
+
+The app can fetch datasets directly from Kaggle.
+
+You need Kaggle authentication. The easiest option is:
 
 ```powershell
 kaggle auth login
 ```
 
-Or set `KAGGLE_API_TOKEN` in `.env`. Legacy `KAGGLE_USERNAME` and `KAGGLE_KEY` credentials are also supported by the Kaggle package. In the app, choose `Kaggle dataset`, enter a dataset reference such as `owner/dataset-slug`, optionally enter a CSV filename, and click `Fetch from Kaggle`. Kaggle dataset metadata is stored as the dataset description automatically, and any additional notes are appended before metadata generation.
+Or set credentials in `.env`:
 
-The saved metadata includes a `schema` object with the user-provided dataset description and inferred column schema. This will be used later by the semantic understanding agent.
+```text
+KAGGLE_API_TOKEN=your_token_here
+```
 
-Each upload gets a CSV-specific metadata file named with the source CSV name and file hash. Uploading the same file with the same name overwrites that file's metadata; uploading a different CSV or changed file creates a separate metadata file. The app also maintains `artifacts/metadata/metadata_index.json` and updates `artifacts/metadata/latest_metadata.json` as a convenience pointer to the most recent upload.
+Legacy Kaggle credentials may also work:
 
-Application logs are written to `artifacts/logs/app.log`. If a CSV upload fails, the UI shows the error and the log file records the exception details.
+```text
+KAGGLE_USERNAME=your_username
+KAGGLE_KEY=your_key
+```
 
-If `py -3.12` is not available on a different machine, install Python 3.12 from python.org and then create the virtual environment with the available Python launcher or executable.
+In the app:
 
-## Standalone Semantic Agent
+1. Choose `Kaggle dataset`.
+2. Enter a dataset reference like:
 
-The first standalone agent lives in `agents/semantic_understanding.py`. It uses LangChain with OpenAI structured output to produce:
+```text
+owner/dataset-slug
+```
+
+3. Optionally enter a specific CSV filename.
+4. Click `Fetch from Kaggle`.
+5. Prepare the dataset.
+
+---
+
+## Run The FastAPI Artifact API
+
+The API is currently read-only. It exposes saved artifacts for the future product frontend.
+
+Start it with:
+
+```powershell
+uvicorn api:app --reload --port 8000
+```
+
+Then open:
+
+```text
+http://localhost:8000/api/health
+```
+
+Useful endpoints:
+
+```text
+GET /api/health
+GET /api/runs
+GET /api/runs/latest
+GET /api/runs/{run_id}
+GET /api/runs/{run_id}/notebook
+```
+
+Example:
+
+```powershell
+Invoke-WebRequest -UseBasicParsing http://localhost:8000/api/runs/latest
+```
+
+---
+
+## How The Pipeline Works
+
+The simplified workflow:
+
+```text
+CSV or Kaggle dataset
+        |
+        v
+Dataset profiling and metadata
+        |
+        v
+Semantic understanding agent
+        |
+        v
+Metric code planner agent
+        |
+        v
+Sandboxed pandas execution
+        |
+        v
+Dashboard planner agent
+        |
+        v
+Dashboard validation
+        |
+        v
+Dashboard critic repair loop
+        |
+        v
+Analytical brain agent
+        |
+        v
+Dashboard + notebook + saved artifacts
+```
+
+Important design rule:
+
+> LLMs plan and explain. Deterministic Python computes and validates.
+
+This keeps the app more reliable than asking an LLM to directly invent chart values.
+
+---
+
+## The Agents
+
+### Semantic Understanding Agent
+
+File:
+
+```text
+agents/semantic_understanding.py
+```
+
+Input:
+
+- dataset metadata
+- column summaries
+- sample rows
+- optional dataset description
+
+Output:
+
+- domain
+- primary entities
+- important dimensions
+- important metrics
+- analytical goals
+- suggested questions
+
+### Metric Code Planner Agent
+
+File:
+
+```text
+agents/metric_code_planner.py
+```
+
+Input:
+
+- semantic understanding
+- dataframe context
+
+Output:
+
+- metric plan
+- analysis output contracts
+- generated pandas code
+- assumptions
+- limitations
+
+The code must create:
 
 ```python
-class SemanticUnderstanding(BaseModel):
-    dataset_domain: str
-    primary_entities: list[str]
-    important_dimensions: list[str]
-    important_metrics: list[str]
-    analytical_goals: list[str]
-    suggested_questions: list[str]
+analysis_outputs = {}
 ```
 
-It can be called from Python code, or run as a CLI against a metadata JSON file and CSV:
+### Dashboard Planner Agent
+
+File:
+
+```text
+agents/dashboard_planner.py
+```
+
+Input:
+
+- metadata
+- semantic understanding
+- metric plan
+- dataframe context
+
+Output:
+
+- dashboard title and summary
+- KPI specs
+- overview charts
+- question views
+- assumptions
+- limitations
+
+### Dashboard Critic Agent
+
+File:
+
+```text
+agents/dashboard_critic.py
+```
+
+Input:
+
+- dashboard plan
+- validation report
+- metric plan
+- compact analysis outputs
+
+Output:
+
+- repaired dashboard plan
+- repair notes
+- remaining risks
+
+### Analytical Brain Agent
+
+File:
+
+```text
+agents/analytical_brain.py
+```
+
+Input:
+
+- semantic output
+- metric plan
+- analysis outputs
+- dashboard plan
+- validation report
+
+Output:
+
+- executive summary
+- key insights
+- evidence
+- business implications
+- recommended actions
+- watchouts
+- follow-up questions
+
+---
+
+## Saved Artifacts
+
+The app writes local files under `artifacts/`.
+
+Common artifact folders:
+
+| Folder | Purpose |
+| --- | --- |
+| `artifacts/datasets/` | Saved CSV files |
+| `artifacts/metadata/` | Dataset profile and index |
+| `artifacts/semantic/` | Semantic agent outputs |
+| `artifacts/metric_plans/` | Metric plan and generated pandas code |
+| `artifacts/dashboard/` | Dashboard plans and validation reports |
+| `artifacts/critiques/` | Dashboard critic repairs |
+| `artifacts/insights/` | Analytical brain outputs |
+| `artifacts/notebooks/` | Generated `.ipynb` audit notebooks |
+| `artifacts/logs/` | Application logs |
+
+If something fails, check:
+
+```text
+artifacts/logs/app.log
+```
+
+---
+
+## Run Tests
+
+Run everything:
 
 ```powershell
-python -m agents.semantic_understanding --metadata artifacts\metadata\latest_metadata.json --csv path\to\dataset.csv
+python -m unittest discover -s tests
 ```
 
-The agent reads `OPENAI_API_KEY` from `.env` and falls back to `VITE_OPENAI_API_KEY` for local compatibility. Set `OPENAI_MODEL` to override the default model.
-
-The Streamlit UI also includes a `Semantic Understanding` tab after CSV upload. Click `Generate semantic understanding` to run the agent against the uploaded dataset metadata and `df.head(5)`. The result is displayed in the app and saved to `artifacts/semantic/`.
-
-## Dashboard Planner
-
-The dashboard planner lives in `agents/dashboard_planner.py`. It uses metadata, semantic understanding, the metric code planner output, and `df.head()` to produce a structured dashboard plan with data integrity notes, KPI specs, overview charts, and question-answer views.
-
-In the Streamlit UI, generate semantic understanding first, then open the `Dashboard` tab and click `Generate dashboard`. The app first runs the metric code planner, executes the generated pandas analysis in a constrained local executor, then passes the structured metric plan into the dashboard planner. Dashboard views reference named `analysis_outputs`, which lets the renderer handle timelines, multi-line entity trends, tables, scalar KPIs, and fallback views more reliably. Metric plans are saved to `artifacts/metric_plans/`, and dashboard plans are saved to `artifacts/dashboard/`.
-
-Standalone dashboard planner usage requires a saved metric plan:
+Run a specific test file:
 
 ```powershell
-python -m agents.dashboard_planner --metadata artifacts\metadata\latest_metadata.json --semantic artifacts\semantic\your_dataset_semantic.json --metric-plan artifacts\metric_plans\your_dataset_metric_plan.json --csv path\to\dataset.csv
+python -m unittest tests.test_api_contracts
 ```
 
-## Standalone Metric Code Planner
+Current tests cover:
 
-The second standalone agent lives in `agents/metric_code_planner.py`. It takes a saved semantic understanding JSON file plus `df.head()` from a CSV and returns a structured pandas metric plan.
+- agent payload contracts
+- generated code sanitizer behavior
+- dashboard validation rules
+- chart rendering contracts
+- notebook generation
+- feature flags
+- artifact path uniqueness
+- FastAPI read-only contracts
 
-The output includes an agent summary, dashboard KPI specs, per-question analysis specs, missing-data strategies, output specs for future rendering, assumptions, limitations, and pandas code. The generated code assumes a dataframe named `df` already exists and stores outputs in a dictionary named `analysis_outputs`. It is not executed by the app yet.
+---
+
+## Common Problems
+
+### `OPENAI_API_KEY` Not Found
+
+Make sure `.env` exists and contains:
+
+```text
+OPENAI_API_KEY=your_key_here
+```
+
+### Streamlit Does Not Start
+
+Make sure your virtual environment is activated:
 
 ```powershell
-python -m agents.metric_code_planner --semantic artifacts\semantic\your_dataset_semantic.json --csv path\to\dataset.csv
+.\.venv\Scripts\Activate.ps1
 ```
 
-## Source Briefs
+Then reinstall dependencies:
 
-- `project-brief.md`
-- `overview.md.txt`
+```powershell
+python -m pip install -r requirements.txt
+```
+
+### Kaggle Import Fails
+
+Check Kaggle authentication:
+
+```powershell
+kaggle auth login
+```
+
+Also confirm the dataset reference looks like:
+
+```text
+owner/dataset-slug
+```
+
+### Dashboard Looks Strange
+
+The app includes validation and critic repair, but generated dashboards can still be imperfect.
+
+Things to inspect:
+
+- dashboard validation report
+- chart scale notes
+- `analysis_outputs` in the notebook
+- `artifacts/logs/app.log`
+
+### Notebook Shows Old Output
+
+Regenerate the dashboard, or delete the matching file in:
+
+```text
+artifacts/notebooks/
+```
+
+Then regenerate the dashboard.
+
+---
+
+## Development Branches
+
+Important branches:
+
+| Branch | Purpose |
+| --- | --- |
+| `main` | Stable current app |
+| `ui-overhaul` | Product UI redesign and FastAPI/Next.js migration |
+
+---
+
+## Documentation
+
+Start here:
+
+- `README.md`: beginner setup and usage
+- `docs/project-introduction.md`: detailed objectives, architecture, and agent communication
+- `docs/dashboard-design-guide.md`: dashboard quality rules
+- `worklog.md`: ongoing project decisions and implementation notes
+
+---
+
+## Design Philosophy
+
+Dashboard Studio should not be a black box.
+
+The app should always make it possible to answer:
+
+- What did the system calculate?
+- What code did it run?
+- What data did it use?
+- Why did it choose this chart?
+- What assumptions did it make?
+- What should I be careful about?
+
+That is why the project stores structured artifacts, validation reports, critic notes, and notebooks.
+
