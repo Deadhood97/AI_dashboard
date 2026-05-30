@@ -1631,3 +1631,80 @@ Interpretation:
 - A better dashboard treatment would show the top phishing subjects plus `email_count`/`phishing_count`, or use a table for all subjects with counts and rates.
 
 Reason: The issue is chart usefulness rather than code execution. The model selected a technically valid bar chart, but the binary 0/1 pattern makes the output look strange without counts or a table.
+
+### Planned UI overhaul
+
+Goal: Move Dashboard Studio from a generic Streamlit prototype into a polished analytics product UI while preserving the current Python agent pipeline.
+
+Diagnosis:
+
+- Streamlit is useful for fast internal tools, but it makes it hard to build a distinctive product interface, precise layout, rich navigation, custom chart interactions, and resilient frontend state.
+- The current UI also feels generic because it uses broad tabs, repeated bordered containers, default chart rendering, visible artifact/debug language, and limited workflow hierarchy.
+- The core product needs to feel like an analytical workspace: clear source state, agent progress, dashboard output, notebook/audit trail, validation, and history should be organized as first-class product surfaces.
+
+Recommended architecture:
+
+- Keep Python as the analytics and agent backend.
+- Add a real frontend app:
+  - Next.js + React + TypeScript for the product shell.
+  - Tailwind CSS for layout primitives.
+  - Radix UI or shadcn/ui for accessible controls, dialogs, tabs, menus, sheets, and command surfaces.
+  - TanStack Query for server state and artifact polling.
+  - Zustand or Jotai for local UI state.
+  - Apache ECharts, Vega-Lite, or Plotly.js for richer chart rendering. Prefer a declarative chart schema so dashboard plans can map cleanly into frontend charts.
+- Add a Python API layer:
+  - FastAPI exposes dataset upload/import, semantic generation, dashboard generation, job status, artifacts, notebook JSON, validation, and history.
+  - Streamlit can remain as an internal/debug shell during migration.
+
+Product redesign direction:
+
+- App shell:
+  - Left rail for datasets/history/jobs.
+  - Top bar with source status, run state, validation state, and export actions.
+  - Main workspace with tabs or segmented views: Dataset, Understanding, Dashboard, Insights, Notebook, Artifacts.
+- Dashboard page:
+  - Less “card stack,” more analytical report layout.
+  - KPI strip only when values are genuinely important.
+  - Chart sections grouped by analytical purpose, not agent internals.
+  - Chart footers should show concise scale/sample-size/data-quality caveats.
+  - Validation warnings should be integrated near affected charts, not hidden in logs.
+- Notebook page:
+  - Render notebook cells as an audit trail, but visually designed like a readable analysis document.
+  - Collapsible generated-code cells.
+  - Outputs displayed as tables/charts with consistent styling.
+- Agent activity:
+  - Use a run timeline: Dataset parsed, semantic agent, metric planner, dashboard planner, critic, analytical brain, notebook artifact.
+  - Persist job state and make reusing history obvious.
+- Visual style:
+  - Quiet operational UI, not a marketing page.
+  - High contrast text, restrained neutral background, one strong action color, semantic status colors.
+  - Compact typography and stable chart dimensions.
+  - Avoid default Streamlit visuals, oversized empty space, generic bordered cards, and raw artifact labels in the main user path.
+
+Safe migration plan:
+
+1. Define frontend-facing API contracts from existing artifacts.
+   - Dataset metadata.
+   - Semantic understanding.
+   - Metric plan summary.
+   - Dashboard plan.
+   - Validation report.
+   - Analytical insights.
+   - Notebook cells.
+2. Build FastAPI read-only endpoints first.
+   - Serve existing artifacts without changing generation.
+   - Add tests for API payloads.
+3. Build Next.js shell against existing artifacts.
+   - No generation actions at first.
+   - Dashboard and notebook are read-only.
+4. Add job actions.
+   - Upload/import dataset.
+   - Generate understanding.
+   - Generate dashboard.
+   - Poll job status.
+5. Move chart rendering to frontend.
+   - Start with bars, lines, tables, KPIs.
+   - Add validation-aware chart guards before rendering.
+6. Keep Streamlit available behind an internal/dev command until the React frontend is stable.
+
+Reason: The UI should become a product-grade analytical workspace while the proven Python agent pipeline remains intact. Separating frontend and backend gives us design freedom without destabilizing data generation.
