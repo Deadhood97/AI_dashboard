@@ -269,6 +269,8 @@ GET /api/runs
 GET /api/runs/latest
 GET /api/runs/{run_id}
 GET /api/runs/{run_id}/notebook
+POST /api/datasets/upload
+POST /api/datasets/kaggle
 ```
 
 Example:
@@ -281,10 +283,12 @@ Invoke-WebRequest -UseBasicParsing http://localhost:8000/api/runs/latest
 
 ## Run The New Frontend Shell
 
-The `ui-overhaul` branch includes an early read-only Next.js frontend in `frontend/`.
+The `ui-overhaul` branch includes an early Next.js frontend in `frontend/`.
 
-It does not generate dashboards yet. It reads saved artifacts from the FastAPI API and renders a product-style workspace with:
+It can load datasets and read saved artifacts from the FastAPI API. It renders a product-style workspace with:
 
+- CSV upload
+- Kaggle dataset import
 - run history
 - validation status
 - dashboard plan cards

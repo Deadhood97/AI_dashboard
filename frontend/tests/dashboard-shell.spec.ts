@@ -15,19 +15,29 @@ async function screenshot(pageName: string, page: import("@playwright/test").Pag
 async function openLoadedApp(page: import("@playwright/test").Page) {
   await page.goto("/");
   await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
-  await expect(page.locator(".statGrid")).toBeVisible();
   await expect(page.locator(".runButton").first()).toBeVisible();
 }
 
 test("renders latest run workspace from the artifact API @screenshots", async ({ page }) => {
   await openLoadedApp(page);
+  await page.getByRole("button", { name: "Dashboard", exact: true }).click();
 
-  await expect(page.getByText("Current Run")).toBeVisible();
   await expect(page.getByRole("button", { name: "Dashboard", exact: true })).toHaveClass(/active/);
   await expect(page.locator(".stat").filter({ hasText: "Rows" })).toBeVisible();
   await expect(page.locator(".chartSpec").first()).toBeVisible();
 
   await screenshot("dashboard-workspace", page);
+});
+
+test("shows upload and Kaggle import entry points @screenshots", async ({ page }) => {
+  await openLoadedApp(page);
+
+  await expect(page.getByRole("button", { name: "Source", exact: true })).toHaveClass(/active/);
+  await expect(page.getByRole("button", { name: "Upload dataset", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Import from Kaggle", exact: true })).toBeVisible();
+  await expect(page.getByPlaceholder("owner/dataset-slug")).toBeVisible();
+
+  await screenshot("source-import", page);
 });
 
 test("shows analytical insights and validation output @screenshots", async ({ page }) => {
@@ -72,7 +82,7 @@ test("keeps the workspace usable on a mobile viewport @screenshots", async ({ pa
   await expect(page.locator(".sidebar")).toBeVisible();
   await expect(page.locator(".topbar")).toBeVisible();
   await expect(page.getByRole("button", { name: "Notebook", exact: true })).toBeVisible();
-  await expect(page.locator(".statGrid")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Upload dataset", exact: true })).toBeVisible();
 
   await screenshot("mobile-dashboard", page);
 });

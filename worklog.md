@@ -1862,3 +1862,43 @@ Notes:
 - Browser screenshots are now generated through Playwright test runs and ignored by git as runtime artifacts.
 
 Reason: The first product frontend should be read-only and artifact-backed. This lets us improve the UI without changing or risking the agent generation pipeline.
+
+### Added Desktop launcher shortcut support
+
+Added `scripts/launch_dashboard_studio.ps1` as a one-click launcher target.
+
+Behavior:
+
+- Starts the FastAPI artifact API on `127.0.0.1:8000` when it is not already running.
+- Installs frontend dependencies if `frontend/node_modules` is missing.
+- Starts the Next.js frontend on `127.0.0.1:3000` when it is not already running.
+- Opens the browser to the frontend.
+- Writes launcher logs to `artifacts/logs/shortcut-*.log`.
+
+Reason: A Desktop shortcut should open the app directly instead of requiring a beginner to remember the separate API and frontend commands.
+
+### Restored source import workflow in the new frontend
+
+The first Next.js shell was read-only, so upload and Kaggle import were still only available in Streamlit. Added those source entry points to the new UI.
+
+Changes made:
+
+- Added FastAPI ingestion endpoints:
+  - `POST /api/datasets/upload`
+  - `POST /api/datasets/kaggle`
+- Added run artifact creation for uploaded/imported CSV files.
+- Added a `Source` tab in the Next.js frontend.
+- Added upload form for local CSV files.
+- Added Kaggle import form for dataset reference, optional CSV filename, and extra context.
+- Added API contract tests for upload and Kaggle ingestion.
+- Added Playwright coverage and screenshot for the Source tab.
+
+Verification:
+
+- `npm.cmd run typecheck` passes.
+- `npm.cmd run build` passes.
+- `.\.venv\Scripts\python.exe -m unittest discover -s tests` passes: 33 tests.
+- `npm.cmd run test:e2e` passes: 6 browser tests.
+- Restarted the local API and confirmed `POST /api/datasets/upload` is registered.
+
+Reason: The new product frontend needs the same first-mile dataset workflow as the old Streamlit app; otherwise users land in a read-only artifact viewer with no obvious way to start.

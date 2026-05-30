@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import re
+from datetime import datetime, timezone
+from io import BytesIO
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
-from fastapi import FastAPI, HTTPException
+import pandas as pd
+from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
@@ -60,6 +64,12 @@ class RunBundle(BaseModel):
     dashboard_critique: dict[str, Any] | None = None
     analytical_insights: dict[str, Any] | None = None
     notebook_available: bool = False
+
+
+class KaggleImportRequest(BaseModel):
+    dataset_ref: str
+    requested_file: str = ""
+    description: str = ""
 
 
 class ArtifactStore:
@@ -165,15 +175,102 @@ class ArtifactStore:
             raise HTTPException(status_code=404, detail="Notebook artifact not found.")
         return read_json(path)
 
+    def save_dataset_run(
+        self,
+        *,
+        filename: str,
+        raw_bytes: bytes,
+        dataset_description: str,
+        source: dict[str, Any],
+    ) -> RunBundle:
+        try:
+            df = pd.read_csv(BytesIO(raw_bytes))
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=f"Could not parse CSV: {exc}") from exc
 
-def create_app(store: ArtifactStore | None = None) -> FastAPI:
+        metadata = {
+            "source_file": filename,
+            "file_sha256": hashlib.sha256(raw_bytes).hexdigest(),
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "dataset_description": dataset_description,
+            "row_count": int(len(df)),
+            "column_count": int(len(df.columns)),
+            "columns": [
+                {
+                    "name": str(column),
+                    "dtype": str(df[column].dtype),
+                    "missing_count": int(df[column].isna().sum()),
+                    "non_null_count": int(df[column].notna().sum()),
+                }
+                for column in df.columns
+            ],
+            "schema": {
+                "description": dataset_description,
+                "columns": [str(column) for column in df.columns],
+            },
+            "source": source,
+        }
+
+        run_id = run_id_for(metadata)
+        for folder in [
+            "metadata",
+            "datasets",
+            "semantic",
+            "metric_plans",
+            "dashboard",
+            "critiques",
+            "insights",
+            "notebooks",
+        ]:
+            (self.root / folder).mkdir(parents=True, exist_ok=True)
+
+        metadata_path = self.path_for(metadata, "metadata")
+        metadata_json = json.dumps(metadata, indent=2)
+        metadata_path.write_text(metadata_json, encoding="utf-8")
+        self.latest_metadata_path.write_text(metadata_json, encoding="utf-8")
+        self.path_for(metadata, "dataset").write_bytes(raw_bytes)
+
+        index = self.list_metadata_entries()
+        index = [
+            entry
+            for entry in index
+            if not (
+                entry.get("source_file") == metadata["source_file"]
+                and entry.get("file_sha256") == metadata["file_sha256"]
+            )
+        ]
+        index.append(
+            {
+                "source_file": metadata["source_file"],
+                "metadata_file": str(metadata_path),
+                "file_sha256": metadata["file_sha256"],
+                "created_at": metadata["created_at"],
+                "row_count": metadata["row_count"],
+                "column_count": metadata["column_count"],
+            }
+        )
+        self.metadata_index_path.write_text(json.dumps(index, indent=2), encoding="utf-8")
+        return self.bundle_for(metadata)
+
+
+def fetch_kaggle_dataset_default(dataset_ref: str, requested_file: str = "") -> dict[str, Any]:
+    from app import fetch_kaggle_dataset
+
+    return fetch_kaggle_dataset(dataset_ref, requested_file)
+
+
+def create_app(
+    store: ArtifactStore | None = None,
+    kaggle_fetcher: Callable[[str, str], dict[str, Any]] | None = None,
+) -> FastAPI:
     store = store or ArtifactStore()
+    kaggle_fetcher = kaggle_fetcher or fetch_kaggle_dataset_default
     app = FastAPI(title="Dashboard Studio API", version="0.1.0")
     app.add_middleware(
         CORSMiddleware,
         allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],
         allow_credentials=True,
-        allow_methods=["GET"],
+        allow_methods=["GET", "POST"],
         allow_headers=["*"],
     )
 
@@ -197,8 +294,45 @@ def create_app(store: ArtifactStore | None = None) -> FastAPI:
     def get_notebook(run_id: str) -> dict[str, Any]:
         return store.notebook_for(store.load_metadata_for_run(run_id))
 
+    @app.post("/api/datasets/upload", response_model=RunBundle)
+    async def upload_dataset(
+        file: UploadFile = File(...),
+        description: str = Form(""),
+    ) -> RunBundle:
+        if not file.filename or not file.filename.lower().endswith(".csv"):
+            raise HTTPException(status_code=400, detail="Upload a CSV file.")
+        raw_bytes = await file.read()
+        if not raw_bytes:
+            raise HTTPException(status_code=400, detail="Uploaded CSV is empty.")
+        return store.save_dataset_run(
+            filename=file.filename,
+            raw_bytes=raw_bytes,
+            dataset_description=description,
+            source={"type": "upload"},
+        )
+
+    @app.post("/api/datasets/kaggle", response_model=RunBundle)
+    def import_kaggle_dataset(payload: KaggleImportRequest) -> RunBundle:
+        try:
+            kaggle_import = kaggle_fetcher(payload.dataset_ref, payload.requested_file)
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=f"Kaggle import failed: {exc}") from exc
+
+        kaggle_description = str(kaggle_import.get("description") or "")
+        description_parts = [part for part in [kaggle_description, payload.description.strip()] if part]
+        return store.save_dataset_run(
+            filename=str(kaggle_import["filename"]),
+            raw_bytes=kaggle_import["raw_bytes"],
+            dataset_description="\n\n".join(description_parts),
+            source={
+                "type": "kaggle",
+                "dataset_ref": kaggle_import.get("dataset_ref"),
+                "selected_file": kaggle_import.get("selected_file"),
+                "download_path": str(kaggle_import.get("download_path", "")),
+            },
+        )
+
     return app
 
 
 app = create_app()
-

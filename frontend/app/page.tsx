@@ -8,25 +8,28 @@ import {
   CircleDot,
   Database,
   FileCode2,
+  FileUp,
   History,
   LineChart,
   Loader2,
   ShieldCheck,
   Sparkles
 } from "lucide-react";
-import { useMemo, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { FormEvent, useMemo, useState } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   DashboardChart,
   RunBundle,
   RunSummary,
+  importKaggleDataset,
   getLatestRun,
   getNotebook,
   getRun,
-  getRuns
+  getRuns,
+  uploadDataset
 } from "../lib/api";
 
-const navItems = ["Dashboard", "Insights", "Notebook", "Artifacts"] as const;
+const navItems = ["Source", "Dashboard", "Insights", "Notebook", "Artifacts"] as const;
 type NavItem = (typeof navItems)[number];
 
 function formatNumber(value?: number | null) {
@@ -247,6 +250,131 @@ function DashboardView({ bundle }: { bundle: RunBundle }) {
   );
 }
 
+function SourceView({ onRunCreated }: { onRunCreated: (runId: string) => void }) {
+  const queryClient = useQueryClient();
+  const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [uploadDescription, setUploadDescription] = useState("");
+  const [kaggleRef, setKaggleRef] = useState("");
+  const [kaggleFile, setKaggleFile] = useState("");
+  const [kaggleDescription, setKaggleDescription] = useState("");
+
+  function handleCreated(bundle: RunBundle) {
+    queryClient.invalidateQueries({ queryKey: ["runs"] });
+    queryClient.invalidateQueries({ queryKey: ["latest-run"] });
+    onRunCreated(bundle.summary.run_id);
+  }
+
+  const uploadMutation = useMutation({
+    mutationFn: () => {
+      if (!selectedFile) {
+        throw new Error("Choose a CSV file first.");
+      }
+      return uploadDataset(selectedFile, uploadDescription);
+    },
+    onSuccess: handleCreated
+  });
+
+  const kaggleMutation = useMutation({
+    mutationFn: () =>
+      importKaggleDataset({
+        dataset_ref: kaggleRef,
+        requested_file: kaggleFile,
+        description: kaggleDescription
+      }),
+    onSuccess: handleCreated
+  });
+
+  function submitUpload(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    uploadMutation.mutate();
+  }
+
+  function submitKaggle(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    kaggleMutation.mutate();
+  }
+
+  return (
+    <div className="workspaceStack">
+      <section className="sourceHero">
+        <div>
+          <div className="eyebrow">Source</div>
+          <h2>Load a dataset</h2>
+          <p>
+            Upload a local CSV or import a Kaggle dataset. This creates a saved run that the agents can use next.
+          </p>
+        </div>
+      </section>
+
+      <section className="sourceGrid">
+        <form className="sourceCard" onSubmit={submitUpload}>
+          <div className="panelTitle">
+            <FileUp size={17} />
+            Upload CSV
+          </div>
+          <label>
+            CSV file
+            <input
+              accept=".csv,text/csv"
+              type="file"
+              onChange={(event) => setSelectedFile(event.target.files?.[0] ?? null)}
+            />
+          </label>
+          <label>
+            Business context
+            <textarea
+              placeholder="Optional notes about the dataset, target audience, or business question."
+              value={uploadDescription}
+              onChange={(event) => setUploadDescription(event.target.value)}
+            />
+          </label>
+          <button className="primaryButton" disabled={uploadMutation.isPending} type="submit">
+            {uploadMutation.isPending ? "Uploading..." : "Upload dataset"}
+          </button>
+          {uploadMutation.isError ? <div className="formError">{String(uploadMutation.error.message)}</div> : null}
+          {uploadMutation.isSuccess ? <div className="formSuccess">Dataset uploaded and selected.</div> : null}
+        </form>
+
+        <form className="sourceCard" onSubmit={submitKaggle}>
+          <div className="panelTitle">
+            <Database size={17} />
+            Import From Kaggle
+          </div>
+          <label>
+            Dataset reference
+            <input
+              placeholder="owner/dataset-slug"
+              value={kaggleRef}
+              onChange={(event) => setKaggleRef(event.target.value)}
+            />
+          </label>
+          <label>
+            CSV filename
+            <input
+              placeholder="Optional, defaults to the first CSV"
+              value={kaggleFile}
+              onChange={(event) => setKaggleFile(event.target.value)}
+            />
+          </label>
+          <label>
+            Additional context
+            <textarea
+              placeholder="Optional notes appended to Kaggle metadata."
+              value={kaggleDescription}
+              onChange={(event) => setKaggleDescription(event.target.value)}
+            />
+          </label>
+          <button className="primaryButton" disabled={kaggleMutation.isPending || !kaggleRef.trim()} type="submit">
+            {kaggleMutation.isPending ? "Importing..." : "Import from Kaggle"}
+          </button>
+          {kaggleMutation.isError ? <div className="formError">{String(kaggleMutation.error.message)}</div> : null}
+          {kaggleMutation.isSuccess ? <div className="formSuccess">Kaggle dataset imported and selected.</div> : null}
+        </form>
+      </section>
+    </div>
+  );
+}
+
 function InsightsView({ bundle }: { bundle: RunBundle }) {
   const insights = bundle.analytical_insights;
   const issues = bundle.validation_report?.issues ?? [];
@@ -373,7 +501,7 @@ function LoadingState({ label }: { label: string }) {
 
 export default function Home() {
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
-  const [active, setActive] = useState<NavItem>("Dashboard");
+  const [active, setActive] = useState<NavItem>("Source");
 
   const latestQuery = useQuery({
     queryKey: ["latest-run"],
@@ -405,9 +533,14 @@ export default function Home() {
           ))}
         </nav>
         {isLoading || !bundle ? (
-          <LoadingState label="Loading dashboard run" />
+          active === "Source" ? (
+            <SourceView onRunCreated={setSelectedRunId} />
+          ) : (
+            <LoadingState label="Loading dashboard run" />
+          )
         ) : (
           <>
+            {active === "Source" ? <SourceView onRunCreated={setSelectedRunId} /> : null}
             {active === "Dashboard" ? <DashboardView bundle={bundle} /> : null}
             {active === "Insights" ? <InsightsView bundle={bundle} /> : null}
             {active === "Notebook" ? (

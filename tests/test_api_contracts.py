@@ -119,6 +119,54 @@ class ApiContractTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 404)
 
+    def test_upload_dataset_creates_new_run(self):
+        response = self.client.post(
+            "/api/datasets/upload",
+            files={"file": ("fresh.csv", b"name,value\nA,1\nB,2\n", "text/csv")},
+            data={"description": "Small upload test"},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["summary"]["source_file"], "fresh.csv")
+        self.assertEqual(payload["summary"]["row_count"], 2)
+        self.assertEqual(payload["summary"]["column_count"], 2)
+        self.assertTrue(payload["summary"]["artifacts"]["metadata"])
+        self.assertTrue(payload["summary"]["artifacts"]["dataset"])
+        self.assertEqual(payload["metadata"]["source"]["type"], "upload")
+
+        latest = self.client.get("/api/runs/latest")
+        self.assertEqual(latest.json()["summary"]["source_file"], "fresh.csv")
+
+    def test_kaggle_import_creates_new_run_with_fetcher(self):
+        def fake_kaggle_fetcher(dataset_ref: str, requested_file: str):
+            return {
+                "dataset_ref": dataset_ref,
+                "selected_file": requested_file or "data.csv",
+                "filename": "kaggle_owner_dataset_data.csv",
+                "raw_bytes": b"city,sales\nParis,10\nBerlin,12\n",
+                "description": "Kaggle metadata description",
+                "download_path": "artifacts/kaggle_downloads/data.csv",
+            }
+
+        client = TestClient(create_app(ArtifactStore(self.root), kaggle_fetcher=fake_kaggle_fetcher))
+        response = client.post(
+            "/api/datasets/kaggle",
+            json={
+                "dataset_ref": "owner/dataset",
+                "requested_file": "data.csv",
+                "description": "User context",
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["summary"]["row_count"], 2)
+        self.assertEqual(payload["metadata"]["source"]["type"], "kaggle")
+        self.assertEqual(payload["metadata"]["source"]["dataset_ref"], "owner/dataset")
+        self.assertIn("Kaggle metadata description", payload["metadata"]["dataset_description"])
+        self.assertIn("User context", payload["metadata"]["dataset_description"])
+
 
 if __name__ == "__main__":
     unittest.main()

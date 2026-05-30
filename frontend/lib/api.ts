@@ -142,3 +142,36 @@ export function getRun(runId: string) {
 export function getNotebook(runId: string) {
   return fetchJson<NotebookPayload>(`/api/runs/${runId}/notebook`);
 }
+
+export async function uploadDataset(file: File, description: string) {
+  const form = new FormData();
+  form.append("file", file);
+  form.append("description", description);
+
+  const response = await fetch(`${API_BASE}/api/datasets/upload`, {
+    method: "POST",
+    body: form
+  });
+  if (!response.ok) {
+    throw new Error(await response.text());
+  }
+  return (await response.json()) as RunBundle;
+}
+
+export async function importKaggleDataset(payload: {
+  dataset_ref: string;
+  requested_file?: string;
+  description?: string;
+}) {
+  const response = await fetch(`${API_BASE}/api/datasets/kaggle`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify(payload)
+  });
+  if (!response.ok) {
+    throw new Error(await response.text());
+  }
+  return (await response.json()) as RunBundle;
+}

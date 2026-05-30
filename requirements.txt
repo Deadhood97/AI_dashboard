@@ -10,3 +10,4 @@ plotly
 nbformat
 fastapi
 uvicorn
+python-multipart
