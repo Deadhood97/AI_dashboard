@@ -89,6 +89,18 @@ class DashboardChartSpec(BaseModel):
     sort_by: str | None = Field(default=None, description="Column to sort by before rendering.")
     sort_order: SortOrder = Field(default="descending", description="Sort direction.")
     orientation: Orientation = Field(default="vertical", description="Chart orientation.")
+    value_axis_min: float | None = Field(
+        default=None,
+        description="Optional explicit minimum for the chart's numeric value axis.",
+    )
+    value_axis_max: float | None = Field(
+        default=None,
+        description="Optional explicit maximum for the chart's numeric value axis.",
+    )
+    scale_note: str | None = Field(
+        default=None,
+        description="User-facing note explaining any non-zero or narrowed axis scale.",
+    )
     question: str | None = Field(
         default=None,
         description="Analytical question this chart helps answer.",
@@ -187,7 +199,11 @@ def build_dashboard_planner_chain(model: str | None = None):
                 "questions. Keep the plan compact: use no more than 2 overview "
                 "charts and no more than 3 question views. Tables should be "
                 "exception views or compact rankings with top_n of 25 or less. "
-                "Avoid duplicate charts. Keep titles concise.",
+                "Avoid duplicate charts. Keep titles concise. "
+                "If numeric values are tightly clustered and a zero baseline would "
+                "hide meaningful differences, set value_axis_min/value_axis_max and "
+                "include a clear scale_note. Do this only when the narrowed scale is "
+                "necessary for interpretation and explicitly disclosed."
             ),
             (
                 "human",

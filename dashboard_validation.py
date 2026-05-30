@@ -80,6 +80,40 @@ def _has_long_text_column(table: pd.DataFrame) -> bool:
     return False
 
 
+def _numeric_range(table: pd.DataFrame, columns: list[str]) -> tuple[float, float] | None:
+    values: list[float] = []
+    for column in columns:
+        if column not in table.columns:
+            continue
+        numeric = pd.to_numeric(table[column], errors="coerce").dropna()
+        values.extend(float(value) for value in numeric.tolist())
+    if not values:
+        return None
+    return min(values), max(values)
+
+
+def _needs_explicit_scale(table: pd.DataFrame, columns: list[str]) -> bool:
+    numeric_range = _numeric_range(table, columns)
+    if numeric_range is None:
+        return False
+
+    min_value, max_value = numeric_range
+    if min_value <= 0 or max_value <= 0 or min_value == max_value:
+        return False
+
+    value_span = max_value - min_value
+    max_abs = max(abs(min_value), abs(max_value), 1.0)
+    return value_span / max_abs <= 0.18 and min_value / max(max_value, 1.0) >= 0.55
+
+
+def _has_declared_scale(spec: DashboardChartSpec) -> bool:
+    return (
+        spec.value_axis_min is not None
+        and spec.value_axis_max is not None
+        and bool(spec.scale_note and spec.scale_note.strip())
+    )
+
+
 def _issue(
     severity: IssueSeverity,
     component: IssueComponent,
@@ -227,20 +261,33 @@ def validate_chart_spec(
                     spec.source_output_key,
                 )
             )
+        for metric in spec.metrics:
+            if metric not in table.columns:
+                issues.append(
+                    _issue(
+                        "error",
+                        "chart",
+                        spec.title,
+                        f"Metric column '{metric}' is not present in the output.",
+                        "Repair the dashboard plan to use available metric columns.",
+                        spec.source_output_key,
+                    )
+                )
 
     if spec.chart_type in {"line", "multi_line"}:
-        if not x or not y:
+        has_y_values = bool(y or spec.metrics)
+        if not x or not has_y_values:
             issues.append(
                 _issue(
                     "error",
                     "chart",
                     spec.title,
-                    "Line charts require both x and y fields.",
-                    "Use a table or provide explicit x/y columns.",
+                    "Line charts require x and y fields or a metrics list.",
+                    "Use a table, provide explicit x/y columns, or provide metrics for a wide-form line chart.",
                     spec.source_output_key,
                 )
             )
-        elif x in table.columns and y in table.columns:
+        elif x in table.columns and (not y or y in table.columns):
             if table[x].nunique(dropna=True) < 2:
                 issues.append(
                     _issue(
@@ -282,6 +329,21 @@ def validate_chart_spec(
                         spec.title,
                         f"Chart ignores additional dimensions with multiple values: {ignored_dimensions}.",
                         "Aggregate or filter those dimensions before plotting, or include the correct entity as color.",
+                        spec.source_output_key,
+                    )
+                )
+
+            y_columns = [y] if y else []
+            if spec.metrics:
+                y_columns.extend(metric for metric in spec.metrics if metric in table.columns)
+            if _needs_explicit_scale(table, y_columns) and not _has_declared_scale(spec):
+                issues.append(
+                    _issue(
+                        "error",
+                        "chart",
+                        spec.title,
+                        "Line values are tightly clustered, so a zero-baseline chart hides the meaningful differences.",
+                        "Repair the chart spec with value_axis_min, value_axis_max, and a scale_note that discloses the narrowed axis.",
                         spec.source_output_key,
                     )
                 )
@@ -359,6 +421,28 @@ def validate_chart_spec(
                                 spec.source_output_key,
                             )
                         )
+            if _needs_explicit_scale(table, [y]) and not _has_declared_scale(spec):
+                issues.append(
+                    _issue(
+                        "error",
+                        "chart",
+                        spec.title,
+                        "Bar values are tightly clustered, so a zero-baseline chart hides the meaningful differences.",
+                        "Repair the chart spec with value_axis_min, value_axis_max, and a scale_note that discloses the narrowed axis.",
+                        spec.source_output_key,
+                    )
+                )
+            if x in table.columns and table[x].nunique(dropna=True) > 25 and not spec.top_n:
+                issues.append(
+                    _issue(
+                        "warning",
+                        "chart",
+                        spec.title,
+                        "Bar chart has many categories and no top_n limit.",
+                        "Use a ranked top_n value or render a table.",
+                        spec.source_output_key,
+                    )
+                )
         elif x in table.columns and table[x].nunique(dropna=True) > 25 and not spec.top_n:
             issues.append(
                 _issue(

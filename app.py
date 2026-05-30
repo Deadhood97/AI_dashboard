@@ -8,6 +8,7 @@ import shutil
 import re
 import tempfile
 import textwrap
+import uuid
 from datetime import datetime, timezone
 from io import BytesIO
 from pathlib import Path
@@ -18,6 +19,11 @@ import plotly.express as px
 import numpy as np
 import streamlit as st
 from dotenv import load_dotenv
+from agents.analytical_brain import (
+    AnalyticalBrainResult,
+    build_analytical_brain_input,
+    generate_analytical_insights,
+)
 from agents.dashboard_planner import (
     DashboardChartSpec,
     DashboardKpiSpec,
@@ -55,6 +61,7 @@ SEMANTIC_DIR = Path("artifacts") / "semantic"
 METRIC_PLAN_DIR = Path("artifacts") / "metric_plans"
 DASHBOARD_DIR = Path("artifacts") / "dashboard"
 CRITIQUE_DIR = Path("artifacts") / "critiques"
+INSIGHTS_DIR = Path("artifacts") / "insights"
 LOG_DIR = Path("artifacts") / "logs"
 APP_LOG_PATH = LOG_DIR / "app.log"
 KAGGLE_DOWNLOAD_DIR = Path("artifacts") / "kaggle_downloads"
@@ -332,7 +339,7 @@ def render_empty_state(title: str, body: str) -> None:
     )
 
 
-def render_dataset_summary(metadata: dict[str, Any], parser_used: str) -> None:
+def render_dataset_summary(metadata: dict[str, Any]) -> None:
     source = metadata.get("source", {})
     source_label = source.get("type", "upload")
     if source_label == "kaggle":
@@ -340,11 +347,10 @@ def render_dataset_summary(metadata: dict[str, Any], parser_used: str) -> None:
     else:
         source_label = "Uploaded CSV"
 
-    cols = st.columns([1.2, 0.8, 0.8, 1.4])
+    cols = st.columns([1.1, 0.9, 1.6])
     cols[0].metric("Rows", f"{metadata['row_count']:,}")
     cols[1].metric("Columns", f"{metadata['column_count']:,}")
     cols[2].metric("Source", source_label)
-    cols[3].metric("Parser", parser_used.replace(" pandas ", " "))
 
 
 def render_artifact_path(label: str, path: Any) -> None:
@@ -602,9 +608,198 @@ def clear_dataset_session_state() -> None:
         "dashboard_validation_path",
         "dashboard_critique",
         "dashboard_critique_path",
+        "analytical_insights",
+        "analytical_insights_path",
+        "dataset_restored_from_history",
+        "semantic_restored_from_history",
+        "dashboard_restored_from_history",
+        "active_dataset_key",
+        "active_dataset_source",
     ]:
         st.session_state.pop(key, None)
     st.session_state["submitted_dataset_key"] = None
+
+
+def hydrate_prepared_dataset_from_artifacts() -> bool:
+    if st.session_state.get("dataset_df") is not None:
+        return True
+    if not LATEST_METADATA_PATH.exists():
+        return False
+
+    try:
+        metadata = json.loads(LATEST_METADATA_PATH.read_text(encoding="utf-8"))
+        dataset_path = dataset_path_for(metadata)
+        if not dataset_path.exists():
+            return False
+        df = pd.read_csv(dataset_path)
+    except Exception:
+        logger.exception("Could not hydrate latest prepared dataset from artifacts.")
+        return False
+
+    dataset_key = (
+        f"restored:{metadata['source_file']}:"
+        f"{metadata['file_sha256']}:"
+        f"{hashlib.sha256(str(metadata.get('dataset_description', '')).encode('utf-8')).hexdigest()}"
+    )
+    st.session_state["submitted_dataset_key"] = dataset_key
+    st.session_state["dataset_df"] = df
+    st.session_state["dataset_metadata"] = metadata
+    st.session_state["metadata_path"] = LATEST_METADATA_PATH
+    st.session_state["dataset_path"] = dataset_path
+    st.session_state["parser_used"] = "saved dataset"
+    st.session_state["active_dataset_key"] = dataset_key
+    st.session_state["active_dataset_source"] = "Restored dataset"
+    st.session_state["dataset_restored_from_history"] = True
+    return True
+
+
+def use_prepared_dataset_from_state() -> tuple[pd.DataFrame, dict[str, Any], Path, str]:
+    return (
+        st.session_state["dataset_df"],
+        st.session_state["dataset_metadata"],
+        st.session_state["metadata_path"],
+        st.session_state["parser_used"],
+    )
+
+
+def semantic_key_for(metadata: dict[str, Any]) -> str:
+    description = str(metadata.get("dataset_description", ""))
+    return (
+        f"{metadata['source_file']}:{metadata['file_sha256']}:"
+        f"{hashlib.sha256(description.encode('utf-8')).hexdigest()}"
+    )
+
+
+def dashboard_key_for(metadata: dict[str, Any], semantic_key: str | None) -> str:
+    return f"{metadata['source_file']}:{metadata['file_sha256']}:{semantic_key or 'no-semantic'}"
+
+
+def restore_semantic_from_artifact(metadata: dict[str, Any], semantic_key: str) -> bool:
+    semantic_path = semantic_path_for(metadata)
+    if not semantic_path.exists():
+        return False
+    try:
+        semantic_result = SemanticUnderstanding.model_validate_json(
+            semantic_path.read_text(encoding="utf-8")
+        )
+    except Exception:
+        logger.exception("Could not restore semantic understanding from %s", semantic_path)
+        return False
+    st.session_state["semantic_understanding"] = semantic_result
+    st.session_state["semantic_understanding_key"] = semantic_key
+    st.session_state["semantic_understanding_path"] = semantic_path
+    st.session_state["semantic_restored_from_history"] = True
+    return True
+
+
+def restore_dashboard_from_artifacts(metadata: dict[str, Any], dashboard_key: str) -> bool:
+    dashboard_path = dashboard_path_for(metadata)
+    metric_plan_path = metric_plan_path_for(metadata)
+    validation_path = dashboard_validation_path_for(metadata)
+    if not dashboard_path.exists() or not metric_plan_path.exists() or not validation_path.exists():
+        return False
+
+    dataset_path = st.session_state.get("dataset_path")
+    if not dataset_path or not Path(dataset_path).exists():
+        dataset_path = dataset_path_for(metadata)
+    if not Path(dataset_path).exists():
+        return False
+
+    try:
+        dashboard_plan = DashboardPlan.model_validate_json(
+            dashboard_path.read_text(encoding="utf-8")
+        )
+        metric_plan = PandasMetricPlan.model_validate_json(
+            metric_plan_path.read_text(encoding="utf-8")
+        )
+        df = pd.read_csv(dataset_path)
+        analysis_outputs = execute_metric_plan(df, metric_plan)
+        missing_keys = missing_dashboard_output_keys(dashboard_plan, analysis_outputs)
+        if missing_keys:
+            logger.warning(
+                "Saved dashboard artifacts are stale for %s; missing output keys: %s",
+                metadata["source_file"],
+                missing_keys,
+            )
+            return False
+
+        validation_report = validate_dashboard_plan(
+            dashboard_plan=dashboard_plan,
+            metric_plan=metric_plan,
+            analysis_outputs=analysis_outputs,
+        )
+
+        critique_path = dashboard_critique_path_for(metadata)
+        critique = (
+            DashboardCritique.model_validate_json(critique_path.read_text(encoding="utf-8"))
+            if critique_path.exists()
+            else None
+        )
+
+        insights_path = insights_path_for(metadata)
+        analytical_insights = (
+            AnalyticalBrainResult.model_validate_json(insights_path.read_text(encoding="utf-8"))
+            if insights_path.exists()
+            else None
+        )
+    except Exception:
+        logger.exception("Could not restore dashboard artifacts for %s", metadata["source_file"])
+        return False
+
+    st.session_state["dashboard_plan"] = dashboard_plan
+    st.session_state["dashboard_plan_key"] = dashboard_key
+    st.session_state["dashboard_plan_path"] = dashboard_path
+    st.session_state["dashboard_validation_report"] = validation_report
+    st.session_state["dashboard_validation_path"] = validation_path
+    st.session_state["dashboard_critique"] = critique
+    st.session_state["dashboard_critique_path"] = critique_path if critique else None
+    st.session_state["analytical_insights"] = analytical_insights
+    st.session_state["analytical_insights_path"] = insights_path if analytical_insights else None
+    st.session_state["metric_plan"] = metric_plan
+    st.session_state["metric_plan_key"] = dashboard_key
+    st.session_state["metric_plan_path"] = metric_plan_path
+    st.session_state["analysis_outputs"] = analysis_outputs
+    st.session_state["dashboard_restored_from_history"] = True
+    return True
+
+
+def missing_dashboard_output_keys(
+    dashboard_plan: DashboardPlan,
+    analysis_outputs: dict[str, Any],
+) -> list[str]:
+    referenced_keys = [kpi.source_output_key for kpi in dashboard_plan.kpis]
+    referenced_keys.extend(chart.source_output_key for chart in dashboard_plan.overview_charts)
+    referenced_keys.extend(
+        question_view.chart.source_output_key
+        for question_view in dashboard_plan.question_views
+    )
+    return sorted(
+        {
+            key
+            for key in referenced_keys
+            if key not in analysis_outputs
+        }
+    )
+
+
+def clear_dashboard_history_state() -> None:
+    for key in [
+        "metric_plan",
+        "metric_plan_key",
+        "metric_plan_path",
+        "analysis_outputs",
+        "dashboard_plan",
+        "dashboard_plan_key",
+        "dashboard_plan_path",
+        "dashboard_validation_report",
+        "dashboard_validation_path",
+        "dashboard_critique",
+        "dashboard_critique_path",
+        "analytical_insights",
+        "analytical_insights_path",
+        "dashboard_restored_from_history",
+    ]:
+        st.session_state.pop(key, None)
 
 
 def infer_column_role(series: pd.Series) -> str:
@@ -819,6 +1014,31 @@ def save_metric_plan(metadata: dict[str, Any], metric_plan: PandasMetricPlan) ->
     return metric_plan_path
 
 
+def failed_metric_plan_path_for(metadata: dict[str, Any]) -> Path:
+    file_hash = str(metadata["file_sha256"])[:12]
+    dataset_slug = slugify_filename(str(metadata["source_file"]))
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S%f")
+    suffix = uuid.uuid4().hex[:8]
+    return METRIC_PLAN_DIR / f"{dataset_slug}_{file_hash}_failed_metric_plan_{timestamp}_{suffix}.json"
+
+
+def save_failed_metric_plan(
+    metadata: dict[str, Any],
+    metric_plan: PandasMetricPlan,
+    error_message: str,
+    sanitized_code: str,
+) -> Path:
+    METRIC_PLAN_DIR.mkdir(parents=True, exist_ok=True)
+    failed_path = failed_metric_plan_path_for(metadata)
+    payload = {
+        "error_message": error_message,
+        "sanitized_code": sanitized_code,
+        "metric_plan": metric_plan.model_dump(),
+    }
+    failed_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    return failed_path
+
+
 def dashboard_path_for(metadata: dict[str, Any]) -> Path:
     file_hash = str(metadata["file_sha256"])[:12]
     dataset_slug = slugify_filename(str(metadata["source_file"]))
@@ -867,6 +1087,22 @@ def save_dashboard_critique(
     return critique_path
 
 
+def insights_path_for(metadata: dict[str, Any]) -> Path:
+    file_hash = str(metadata["file_sha256"])[:12]
+    dataset_slug = slugify_filename(str(metadata["source_file"]))
+    return INSIGHTS_DIR / f"{dataset_slug}_{file_hash}_analytical_insights.json"
+
+
+def save_analytical_insights(
+    metadata: dict[str, Any],
+    insights: AnalyticalBrainResult,
+) -> Path:
+    INSIGHTS_DIR.mkdir(parents=True, exist_ok=True)
+    insights_path = insights_path_for(metadata)
+    insights_path.write_text(insights.model_dump_json(indent=2), encoding="utf-8")
+    return insights_path
+
+
 def data_integrity_summary(df: pd.DataFrame) -> dict[str, Any]:
     total_cells = int(df.shape[0] * df.shape[1])
     missing_cells = int(df.isna().sum().sum())
@@ -913,6 +1149,8 @@ def sanitize_generated_code(code: str) -> str:
             if line.strip():
                 previous_significant = line.rstrip()
         cleaned_code = "\n".join(normalized_lines)
+    except SyntaxError:
+        return cleaned_code
 
     return cleaned_code
 
@@ -920,11 +1158,24 @@ def sanitize_generated_code(code: str) -> str:
 def validate_generated_code(code: str) -> None:
     tree = ast.parse(code)
     blocked_names = {"open", "exec", "eval", "compile", "__import__", "input"}
-    blocked_roots = {"os", "sys", "subprocess", "socket", "requests", "pathlib", "shutil"}
+    blocked_roots = {
+        "os",
+        "sys",
+        "subprocess",
+        "socket",
+        "requests",
+        "pathlib",
+        "shutil",
+        "scipy",
+        "sklearn",
+        "statsmodels",
+    }
 
     for node in ast.walk(tree):
         if isinstance(node, (ast.Import, ast.ImportFrom)):
             raise ValueError("Generated code may not import modules.")
+        if isinstance(node, ast.Name) and node.id in {"__builtins__", "__loader__", "__spec__"}:
+            raise ValueError("Generated code may not access interpreter internals.")
         if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
             if node.func.id in blocked_names:
                 raise ValueError(f"Generated code may not call {node.func.id}.")
@@ -962,6 +1213,10 @@ def execute_metric_plan(df: pd.DataFrame, metric_plan: PandasMetricPlan) -> dict
         "abs": abs,
         "round": round,
         "enumerate": enumerate,
+        "isinstance": isinstance,
+        "zip": zip,
+        "all": all,
+        "any": any,
     }
     globals_dict = {"__builtins__": safe_builtins, "pd": pd, "np": np}
     locals_dict: dict[str, Any] = {"df": df.copy()}
@@ -976,7 +1231,8 @@ def generate_executable_metric_plan(
     df: pd.DataFrame,
     semantic_understanding: SemanticUnderstanding,
     df_head: str,
-    max_repairs: int = 1,
+    metadata: dict[str, Any] | None = None,
+    max_repairs: int = 2,
 ) -> tuple[PandasMetricPlan, dict[str, Any]]:
     metric_plan = generate_metric_code_plan(
         semantic_understanding=semantic_understanding,
@@ -986,6 +1242,16 @@ def generate_executable_metric_plan(
         try:
             return metric_plan, execute_metric_plan(df, metric_plan)
         except Exception as exc:
+            sanitized_code = sanitize_generated_code(metric_plan.pandas_code)
+            error_message = f"{type(exc).__name__}: {exc}"
+            if metadata is not None:
+                failed_path = save_failed_metric_plan(
+                    metadata,
+                    metric_plan,
+                    error_message,
+                    sanitized_code,
+                )
+                logger.info("Saved failed metric plan attempt: %s", failed_path)
             if attempt >= max_repairs:
                 raise
             logger.info("Repairing metric plan after execution failure: %s", exc)
@@ -993,7 +1259,8 @@ def generate_executable_metric_plan(
                 failed_plan=metric_plan,
                 semantic_understanding=semantic_understanding,
                 df_head=df_head,
-                error_message=f"{type(exc).__name__}: {exc}",
+                error_message=error_message,
+                failing_code=sanitized_code,
             )
 
     raise RuntimeError("Metric plan repair loop exited unexpectedly.")
@@ -1032,6 +1299,7 @@ def generate_validated_dashboard_plan(
             metadata=metadata,
             semantic_understanding=semantic_understanding,
             metric_plan=metric_plan,
+            analysis_outputs=analysis_outputs,
             dashboard_plan=dashboard_plan,
             validation_report=validation_report,
             df_context=df_context,
@@ -1246,6 +1514,19 @@ def chart_key(spec: DashboardChartSpec) -> str:
     return re.sub(r"[^a-zA-Z0-9_-]+", "-", raw_key).strip("-").lower()
 
 
+def apply_declared_value_axis_scale(
+    fig: Any,
+    spec: DashboardChartSpec,
+    axis: str = "y",
+) -> None:
+    if spec.value_axis_min is None or spec.value_axis_max is None:
+        return
+    if axis == "x":
+        fig.update_xaxes(range=[spec.value_axis_min, spec.value_axis_max])
+    else:
+        fig.update_yaxes(range=[spec.value_axis_min, spec.value_axis_max])
+
+
 def render_text_output(output: Any) -> None:
     if isinstance(output, dict):
         cols = st.columns(min(len(output), 4) or 1)
@@ -1302,11 +1583,15 @@ def render_chart(
         if spec.chart_type == "bar" and x in chart_data.columns and y in chart_data.columns:
             if spec.orientation == "horizontal":
                 fig = px.bar(chart_data, x=y, y=x, orientation="h")
+                apply_declared_value_axis_scale(fig, spec, axis="x")
             else:
                 fig = px.bar(chart_data, x=x, y=y, color=spec.color if spec.color in chart_data.columns else None)
+                apply_declared_value_axis_scale(fig, spec, axis="y")
             fig.update_layout(margin=dict(l=8, r=8, t=12, b=8), legend_title_text="")
             with chart_container:
                 st.plotly_chart(fig, use_container_width=True, key=chart_key(spec))
+                if spec.scale_note:
+                    st.caption(spec.scale_note)
         elif spec.chart_type in {"line", "multi_line"} and x in chart_data.columns:
             y_value: str | list[str] | None = y if y in chart_data.columns else None
             if not y_value and spec.metrics:
@@ -1322,9 +1607,12 @@ def render_chart(
                 color=spec.color if spec.color in chart_data.columns else None,
                 markers=True,
             )
+            apply_declared_value_axis_scale(fig, spec, axis="y")
             fig.update_layout(margin=dict(l=8, r=8, t=12, b=8), legend_title_text="")
             with chart_container:
                 st.plotly_chart(fig, use_container_width=True, key=chart_key(spec))
+                if spec.scale_note:
+                    st.caption(spec.scale_note)
         elif spec.chart_type == "histogram" and y in chart_data.columns:
             fig = px.histogram(chart_data, x=y)
             fig.update_layout(margin=dict(l=8, r=8, t=12, b=8))
@@ -1381,16 +1669,50 @@ def render_dashboard_critique(critique: DashboardCritique | None) -> None:
         render_list("Remaining risks", critique.remaining_risks)
 
 
+def render_analytical_insights(insights: AnalyticalBrainResult | None) -> None:
+    if insights is None:
+        return
+
+    render_section_heading("Analytical Brain", insights.narrative_title, insights.executive_summary)
+    for insight in insights.key_insights:
+        with st.container(border=True):
+            top_cols = st.columns([3, 1, 1])
+            top_cols[0].markdown(f"**{insight.headline}**")
+            top_cols[1].metric("Impact", insight.impact.title())
+            top_cols[2].metric("Confidence", insight.confidence.title())
+            st.write(insight.explanation)
+            st.markdown("**Evidence**")
+            for evidence in insight.evidence:
+                st.caption(evidence)
+            st.markdown("**Implication**")
+            st.write(insight.business_implication)
+            st.markdown("**Recommended action**")
+            st.write(insight.recommended_action)
+            if insight.related_dashboard_items:
+                st.caption(
+                    "Related: "
+                    + ", ".join(f"`{item}`" for item in insight.related_dashboard_items)
+                )
+
+    lower_cols = st.columns(2)
+    with lower_cols[0]:
+        render_list("Watchouts", insights.watchouts)
+    with lower_cols[1]:
+        render_list("Follow-up questions", insights.follow_up_questions)
+
+
 def render_dashboard(
     df: pd.DataFrame,
     plan: DashboardPlan,
     analysis_outputs: dict[str, Any],
     validation_report: DashboardValidationReport | None = None,
     critique: DashboardCritique | None = None,
+    analytical_insights: AnalyticalBrainResult | None = None,
 ) -> None:
     render_section_heading("Dashboard", plan.dashboard_title, plan.dashboard_summary)
     render_validation_report(validation_report)
     render_dashboard_critique(critique)
+    render_analytical_insights(analytical_insights)
     render_data_integrity(df, plan)
     render_kpis(analysis_outputs, plan, validation_report)
 
@@ -1533,85 +1855,94 @@ def main() -> None:
 
                 st.caption(f"`{kaggle_import['selected_file']}`")
 
+    restored_dataset = False
     if empty_state:
-        render_empty_state(*empty_state)
-        return
-
-    dataset_key = (
-        f"{data_source}:{source_filename}:"
-        f"{hashlib.sha256(raw_bytes).hexdigest()}:"
-        f"{hashlib.sha256(cleaned_description.encode('utf-8')).hexdigest()}"
-    )
-
-    if st.session_state.get("submitted_dataset_key") != dataset_key:
-        clear_dataset_session_state()
-
-    dataset_already_submitted = st.session_state.get("submitted_dataset_key") == dataset_key
-    with st.sidebar:
-        st.markdown("### Run")
-        submit_clicked = st.button("Prepare dataset", type="primary", use_container_width=True)
-
-    if not dataset_already_submitted and not submit_clicked:
-        render_empty_state(
-            "Dataset ready",
-            "Prepare the dataset to profile columns and unlock agent analysis.",
-        )
-        return
-
-    if dataset_already_submitted and not submit_clicked:
-        df = st.session_state["dataset_df"]
-        metadata = st.session_state["dataset_metadata"]
-        metadata_path = st.session_state["metadata_path"]
-        parser_used = st.session_state["parser_used"]
-    else:
-        logger.info(
-            "CSV dataset submitted: source=%s filename=%s size_bytes=%s",
-            data_source,
-            source_filename,
-            len(raw_bytes),
-        )
-
-        try:
-            df, parser_used = read_csv_with_fallbacks(csv_file)
-        except Exception as exc:
-            logger.exception("CSV read failed: filename=%s", source_filename)
-            st.error(f"Could not read CSV: {exc}")
-            st.caption(f"Log: `{APP_LOG_PATH}`")
-            st.stop()
-
-        metadata = build_dataset_metadata(
-            df,
-            source_filename,
-            raw_bytes,
-            cleaned_description,
-        )
-        if data_source == "Kaggle dataset":
-            metadata["source"] = {
-                "type": "kaggle",
-                "dataset_ref": kaggle_import["dataset_ref"],
-                "selected_file": kaggle_import["selected_file"],
-                "download_path": str(kaggle_import["download_path"]),
-            }
+        restored_dataset = hydrate_prepared_dataset_from_artifacts()
+        if restored_dataset:
+            df, metadata, metadata_path, parser_used = use_prepared_dataset_from_state()
+            source_filename = str(metadata["source_file"])
+            cleaned_description = str(metadata.get("dataset_description", ""))
+            data_source = st.session_state.get("active_dataset_source", "Restored dataset")
+            dataset_key = str(st.session_state["submitted_dataset_key"])
         else:
-            metadata["source"] = {"type": "upload"}
-        metadata_path = save_metadata(metadata)
-        dataset_path = save_uploaded_dataset(metadata, raw_bytes)
-        st.session_state["submitted_dataset_key"] = dataset_key
-        st.session_state["dataset_df"] = df
-        st.session_state["dataset_metadata"] = metadata
-        st.session_state["metadata_path"] = metadata_path
-        st.session_state["dataset_path"] = dataset_path
-        st.session_state["parser_used"] = parser_used
-        logger.info(
-            "CSV dataset processed: source=%s filename=%s rows=%s columns=%s description_chars=%s metadata_path=%s dataset_path=%s",
-            data_source,
-            source_filename,
-            metadata["row_count"],
-            metadata["column_count"],
-            len(cleaned_description),
-            metadata_path,
-            dataset_path,
+            render_empty_state(*empty_state)
+            return
+    else:
+        dataset_key = (
+            f"{data_source}:{source_filename}:"
+            f"{hashlib.sha256(raw_bytes).hexdigest()}:"
+            f"{hashlib.sha256(cleaned_description.encode('utf-8')).hexdigest()}"
         )
+
+        dataset_already_submitted = st.session_state.get("submitted_dataset_key") == dataset_key
+        with st.sidebar:
+            st.markdown("### Run")
+            submit_clicked = st.button("Prepare dataset", type="primary", use_container_width=True)
+
+        if not dataset_already_submitted and not submit_clicked:
+            render_empty_state(
+                "Dataset ready",
+                "Prepare the dataset to profile columns and unlock agent analysis.",
+            )
+            return
+
+        if dataset_already_submitted and not submit_clicked:
+            df, metadata, metadata_path, parser_used = use_prepared_dataset_from_state()
+        else:
+            if st.session_state.get("submitted_dataset_key") != dataset_key:
+                clear_dataset_session_state()
+            logger.info(
+                "CSV dataset submitted: source=%s filename=%s size_bytes=%s",
+                data_source,
+                source_filename,
+                len(raw_bytes),
+            )
+
+            try:
+                df, parser_used = read_csv_with_fallbacks(csv_file)
+            except Exception as exc:
+                logger.exception("CSV read failed: filename=%s", source_filename)
+                st.error(f"Could not read CSV: {exc}")
+                st.caption(f"Log: `{APP_LOG_PATH}`")
+                st.stop()
+
+            metadata = build_dataset_metadata(
+                df,
+                source_filename,
+                raw_bytes,
+                cleaned_description,
+            )
+            if data_source == "Kaggle dataset":
+                metadata["source"] = {
+                    "type": "kaggle",
+                    "dataset_ref": kaggle_import["dataset_ref"],
+                    "selected_file": kaggle_import["selected_file"],
+                    "download_path": str(kaggle_import["download_path"]),
+                }
+            else:
+                metadata["source"] = {"type": "upload"}
+            metadata_path = save_metadata(metadata)
+            dataset_path = save_uploaded_dataset(metadata, raw_bytes)
+            st.session_state["submitted_dataset_key"] = dataset_key
+            st.session_state["dataset_df"] = df
+            st.session_state["dataset_metadata"] = metadata
+            st.session_state["metadata_path"] = metadata_path
+            st.session_state["dataset_path"] = dataset_path
+            st.session_state["parser_used"] = parser_used
+            st.session_state["active_dataset_source"] = data_source
+            st.session_state["dataset_restored_from_history"] = False
+            st.session_state["semantic_restored_from_history"] = False
+            st.session_state["dashboard_restored_from_history"] = False
+            logger.info(
+                "CSV dataset processed: source=%s filename=%s rows=%s columns=%s description_chars=%s metadata_path=%s dataset_path=%s",
+                data_source,
+                source_filename,
+                metadata["row_count"],
+                metadata["column_count"],
+                len(cleaned_description),
+                metadata_path,
+                dataset_path,
+            )
 
     if st.session_state.get("submitted_dataset_key") != dataset_key:
         render_empty_state(
@@ -1620,7 +1951,9 @@ def main() -> None:
         )
         return
 
-    render_dataset_summary(metadata, parser_used)
+    render_dataset_summary(metadata)
+    if st.session_state.get("dataset_restored_from_history"):
+        st.caption("Restored the latest prepared dataset from history.")
 
     tab_data, tab_columns, tab_semantic, tab_dashboard, tab_metadata = st.tabs(
         ["Preview", "Schema", "Understanding", "Dashboard", "Artifacts"]
@@ -1656,10 +1989,7 @@ def main() -> None:
     with tab_semantic:
         render_section_heading("Agent", "Semantic Understanding")
 
-        semantic_key = (
-            f"{metadata['source_file']}:{metadata['file_sha256']}:"
-            f"{hashlib.sha256(cleaned_description.encode('utf-8')).hexdigest()}"
-        )
+        semantic_key = semantic_key_for(metadata)
         if st.button("Generate understanding", type="primary"):
             df_head = build_dataframe_context(metadata, df)
             try:
@@ -1680,6 +2010,7 @@ def main() -> None:
                 st.session_state["semantic_understanding"] = semantic_result
                 st.session_state["semantic_understanding_key"] = semantic_key
                 st.session_state["semantic_understanding_path"] = semantic_path
+                st.session_state["semantic_restored_from_history"] = False
                 logger.info(
                     "Semantic understanding generated: filename=%s semantic_path=%s",
                     source_filename,
@@ -1689,11 +2020,17 @@ def main() -> None:
 
         existing_semantic = st.session_state.get("semantic_understanding")
         existing_semantic_key = st.session_state.get("semantic_understanding_key")
+        if not existing_semantic or existing_semantic_key != semantic_key:
+            restore_semantic_from_artifact(metadata, semantic_key)
+            existing_semantic = st.session_state.get("semantic_understanding")
+            existing_semantic_key = st.session_state.get("semantic_understanding_key")
 
         if existing_semantic and existing_semantic_key == semantic_key:
             semantic_path = st.session_state.get("semantic_understanding_path")
             if semantic_path:
                 render_artifact_path("Semantic artifact", semantic_path)
+            if st.session_state.get("semantic_restored_from_history"):
+                st.caption("Restored semantic understanding from history.")
             render_semantic_understanding(existing_semantic)
             st.download_button(
                 "Download semantic understanding JSON",
@@ -1710,10 +2047,7 @@ def main() -> None:
         existing_semantic = st.session_state.get("semantic_understanding")
         existing_semantic_key = st.session_state.get("semantic_understanding_key")
         semantic_is_current = existing_semantic and existing_semantic_key == semantic_key
-        dashboard_key = (
-            f"{metadata['source_file']}:{metadata['file_sha256']}:"
-            f"{existing_semantic_key or 'no-semantic'}"
-        )
+        dashboard_key = dashboard_key_for(metadata, existing_semantic_key)
 
         if not semantic_is_current:
             render_empty_state("Understanding required", "Generate semantic understanding before creating the dashboard.")
@@ -1725,6 +2059,7 @@ def main() -> None:
                         df=df,
                         semantic_understanding=existing_semantic,
                         df_head=df_head,
+                        metadata=metadata,
                     )
                     metric_plan_path = save_metric_plan(metadata, metric_plan)
                     dashboard_plan, validation_report, critique = generate_validated_dashboard_plan(
@@ -1744,6 +2079,25 @@ def main() -> None:
                         if critique is not None
                         else None
                     )
+                    analytical_insights = None
+                    insights_path = None
+                    try:
+                        analytical_input = build_analytical_brain_input(
+                            metadata=metadata,
+                            semantic_understanding=existing_semantic,
+                            metric_plan=metric_plan,
+                            analysis_outputs=analysis_outputs,
+                            dashboard_plan=dashboard_plan,
+                            validation_report=validation_report,
+                            df_context=df_head,
+                        )
+                        analytical_insights = generate_analytical_insights(analytical_input)
+                        insights_path = save_analytical_insights(metadata, analytical_insights)
+                    except Exception:
+                        logger.exception(
+                            "Analytical brain failed: filename=%s",
+                            source_filename,
+                        )
             except Exception as exc:
                 metric_plan_path = locals().get("metric_plan_path")
                 logger.exception(
@@ -1763,23 +2117,34 @@ def main() -> None:
                 st.session_state["dashboard_validation_path"] = validation_path
                 st.session_state["dashboard_critique"] = critique
                 st.session_state["dashboard_critique_path"] = critique_path
+                st.session_state["analytical_insights"] = analytical_insights
+                st.session_state["analytical_insights_path"] = insights_path
                 st.session_state["metric_plan"] = metric_plan
                 st.session_state["metric_plan_key"] = dashboard_key
                 st.session_state["metric_plan_path"] = metric_plan_path
                 st.session_state["analysis_outputs"] = analysis_outputs
+                st.session_state["dashboard_restored_from_history"] = False
                 logger.info(
-                    "Dashboard generated: filename=%s metric_plan_path=%s dashboard_path=%s validation_path=%s critique_path=%s validation_status=%s",
+                    "Dashboard generated: filename=%s metric_plan_path=%s dashboard_path=%s validation_path=%s critique_path=%s insights_path=%s validation_status=%s",
                     source_filename,
                     metric_plan_path,
                     dashboard_path,
                     validation_path,
                     critique_path,
+                    insights_path,
                     validation_report.status,
                 )
                 st.success("Dashboard generated.")
 
         existing_dashboard = st.session_state.get("dashboard_plan")
         existing_dashboard_key = st.session_state.get("dashboard_plan_key")
+        if (
+            semantic_is_current
+            and (not existing_dashboard or existing_dashboard_key != dashboard_key)
+        ):
+            restore_dashboard_from_artifacts(metadata, dashboard_key)
+            existing_dashboard = st.session_state.get("dashboard_plan")
+            existing_dashboard_key = st.session_state.get("dashboard_plan_key")
         if semantic_is_current and existing_dashboard and existing_dashboard_key == dashboard_key:
             dashboard_path = st.session_state.get("dashboard_plan_path")
             metric_plan_path = st.session_state.get("metric_plan_path")
@@ -1789,25 +2154,47 @@ def main() -> None:
             render_artifact_path("Validation report", validation_path)
             critique_path = st.session_state.get("dashboard_critique_path")
             render_artifact_path("Critique", critique_path)
+            insights_path = st.session_state.get("analytical_insights_path")
+            render_artifact_path("Analytical insights", insights_path)
+            if st.session_state.get("dashboard_restored_from_history"):
+                st.caption("Restored dashboard artifacts from history; agents were not rerun.")
             analysis_outputs = st.session_state.get("analysis_outputs")
             validation_report = st.session_state.get("dashboard_validation_report")
             critique = st.session_state.get("dashboard_critique")
+            analytical_insights = st.session_state.get("analytical_insights")
             if not isinstance(analysis_outputs, dict):
                 st.warning("Analysis outputs are missing. Regenerate the dashboard.")
             else:
-                render_dashboard(
-                    df,
-                    existing_dashboard,
-                    analysis_outputs,
-                    validation_report,
-                    critique,
-                )
-            st.download_button(
-                "Download dashboard plan JSON",
-                data=existing_dashboard.model_dump_json(indent=2),
-                file_name="dashboard_plan.json",
-                mime="application/json",
-            )
+                missing_keys = missing_dashboard_output_keys(existing_dashboard, analysis_outputs)
+                if missing_keys:
+                    clear_dashboard_history_state()
+                    st.warning(
+                        "Saved dashboard history is out of sync with the saved metric outputs. "
+                        "Generate the dashboard again to rebuild compatible artifacts."
+                    )
+                    st.caption("Missing output keys: " + ", ".join(f"`{key}`" for key in missing_keys))
+                else:
+                    render_dashboard(
+                        df,
+                        existing_dashboard,
+                        analysis_outputs,
+                        validation_report,
+                        critique,
+                        analytical_insights,
+                    )
+                    st.download_button(
+                        "Download dashboard plan JSON",
+                        data=existing_dashboard.model_dump_json(indent=2),
+                        file_name="dashboard_plan.json",
+                        mime="application/json",
+                    )
+                    if analytical_insights:
+                        st.download_button(
+                            "Download analytical insights JSON",
+                            data=analytical_insights.model_dump_json(indent=2),
+                            file_name="analytical_insights.json",
+                            mime="application/json",
+                        )
         elif semantic_is_current:
             render_empty_state("No dashboard yet", "Generate the dashboard after semantic understanding is current.")
 

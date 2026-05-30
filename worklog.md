@@ -1161,3 +1161,261 @@ Verification:
 - Playwright screenshots confirm readable desktop and mobile first screens.
 
 Reason: Best frontend practice for this product is not decorative polish. It is clear workflow state, strong contrast, calm density, mobile-safe instructions, and a layout that makes the next action obvious.
+
+### Added analytical brain agent
+
+Planned and started the final insight agent: the analytical brain.
+
+Goal: After the semantic agent, metric planner, dashboard planner, validation, and optional critic repair have produced a dashboard, the analytical brain synthesizes the generated outputs into high-quality business insights.
+
+Structured input:
+
+- dataset metadata
+- semantic understanding agent output
+- metric code planner output
+- compacted deterministic analysis outputs
+- final dashboard plan
+- dashboard validation report
+- dataframe context
+
+Structured output:
+
+- narrative title
+- executive summary
+- prioritized key insights
+- evidence for each insight
+- business implication
+- recommended action
+- confidence
+- impact
+- related dashboard items
+- watchouts
+- follow-up questions
+
+Changes made:
+
+- Added `agents/analytical_brain.py`.
+- Added `AnalyticalBrainInput`, `AnalyticalBrainResult`, and `DashboardInsight` Pydantic models.
+- Used OpenAI structured output for the analytical brain result.
+- Added compacting for tabular analysis outputs before sending them to the LLM.
+- Wired the analytical brain after dashboard validation in the app.
+- Saved analytical insight artifacts under `artifacts/insights/`.
+- Rendered analytical insights near the top of the Dashboard tab before health/KPI/chart sections.
+- Made the analytical brain non-blocking so the dashboard still renders if insight generation fails.
+- Removed parser details from the visible dataset summary because users do not need that implementation detail in the main product UI.
+
+Verification:
+
+- `python -m py_compile app.py agents/analytical_brain.py agents/dashboard_critic.py agents/dashboard_planner.py agents/metric_code_planner.py dashboard_validation.py tests/test_generated_code_sanitizer.py` passes.
+- `python -m unittest tests.test_generated_code_sanitizer` passes.
+- Streamlit AppTest smoke checks pass for upload and Kaggle modes.
+
+Reason: The dashboard should not only show computed views; it should explain what matters. The analytical brain turns validated dashboard outputs into a clear, evidence-backed narrative while keeping all inputs and outputs structured for reliability and future notebook tracing.
+
+### Moved chart scale quality into critic loop
+
+Reviewed a dashboard screenshot where bar charts had values clustered around the 50s and 60s but were rendered from a zero baseline. The charts were technically correct, but the scale hid the meaningful differences.
+
+Initial thought was to auto-scale charts in the renderer, but that would make scale changes invisible to the dashboard quality process. Revised approach:
+
+- Added explicit `value_axis_min`, `value_axis_max`, and `scale_note` fields to `DashboardChartSpec`.
+- Updated dashboard planner guidance to use narrowed scales only when needed and to disclose them.
+- Updated deterministic validation to flag bar and line charts where values are tightly clustered and a zero baseline hides meaningful differences.
+- Made that scale issue an error so the dashboard critic repair loop is invoked.
+- Updated dashboard critic guidance so it repairs scale issues by setting explicit axis bounds and a visible scale note, rather than silently changing rendering.
+- Passed compact analysis output samples into the critic so it can see the actual values and choose a sensible range with padding.
+- Updated the renderer to apply only declared axis ranges from the chart spec, and to display the declared `scale_note`.
+- Added `tests/test_dashboard_scale_validation.py` to verify clustered charts require declared scale metadata and pass once the scale is explicitly documented.
+
+Verification:
+
+- `python -m py_compile app.py dashboard_validation.py agents/dashboard_planner.py agents/dashboard_critic.py agents/analytical_brain.py tests/test_dashboard_scale_validation.py` passes.
+- `python -m unittest tests.test_generated_code_sanitizer tests.test_dashboard_scale_validation` passes.
+- Streamlit AppTest smoke check passes.
+
+Reason: Scale is an analytical design decision, not a renderer convenience. The critic should call it out, repair it explicitly, and leave a visible note so the user understands when an axis does not start at zero.
+
+### Added artifact-backed app history and agent cache
+
+Reviewed a state problem where clicking dashboard actions could make the app feel like the fetched/prepared data had disappeared. The root issue was that the UI treated the sidebar source widgets as the only source of truth, while prepared datasets and generated agent artifacts already existed on disk.
+
+Changes made:
+
+- Added dataset hydration from `artifacts/metadata/latest_metadata.json` and the saved dataset CSV.
+- Added restore helpers for semantic understanding, dashboard plans, metric plans, validation reports, critiques, analytical insights, and deterministic analysis outputs.
+- Added stable cache keys for semantic and dashboard artifacts.
+- Changed the main flow so an empty source panel can still restore the latest prepared dataset instead of returning to a blank start screen.
+- Stopped clearing prepared state just because source widget values differ; downstream state is cleared only when preparing a new dataset.
+- Added visible captions when dataset, semantic output, or dashboard artifacts are restored from history.
+- Restored dashboards rerun only deterministic metric code locally; semantic/dashboard/critic/analytical agents are not called again when matching artifacts already exist.
+
+Verification:
+
+- `python -m py_compile app.py dashboard_validation.py agents/dashboard_critic.py agents/dashboard_planner.py agents/analytical_brain.py` passes.
+- `python -m unittest tests.test_generated_code_sanitizer tests.test_dashboard_scale_validation` passes.
+- Streamlit AppTest smoke check passes.
+
+Reason: The app should behave like a workspace, not a one-shot form. Once data or agent outputs have been created, they should be remembered and reused until the user intentionally prepares a different dataset or regenerates a step.
+
+### Guarded dashboard history against stale artifacts
+
+Investigated a dashboard restore issue where chart cards showed messages such as:
+
+- `Missing analysis output: mental_wellbeing_by_demographic`
+- `Missing analysis output: top_regions_innovation_rate`
+
+Finding: The saved dashboard plan referenced output keys that were not produced by the saved metric plan for the same dataset. The app restored both artifacts from history but did not check whether their contracts still matched before rendering.
+
+Changes made:
+
+- Added `missing_dashboard_output_keys()` to compare dashboard KPI/chart `source_output_key` values against current `analysis_outputs`.
+- Updated dashboard artifact restore so stale dashboard history is rejected if referenced output keys are missing.
+- Recompute validation during restore from the restored metric outputs instead of trusting an old validation artifact blindly.
+- Added a final render-time compatibility check so broken chart cards are not shown if stale state is already in memory.
+- Added `clear_dashboard_history_state()` to remove stale dashboard state while preserving the prepared dataset and semantic output.
+- The UI now shows a single warning explaining that saved dashboard history is out of sync and asks the user to regenerate, instead of rendering multiple broken chart cards.
+
+Verification:
+
+- `python -m py_compile app.py` passes.
+- `python -m unittest tests.test_generated_code_sanitizer tests.test_dashboard_scale_validation` passes.
+- Streamlit AppTest smoke check passes.
+
+Reason: History is useful only if restored artifacts still satisfy their contracts. Dashboard plans and metric outputs must be treated as a matched pair; otherwise the app should invalidate the dashboard layer and ask for regeneration.
+
+### Fixed current dashboard generation errors
+
+Checked current logs after dashboard generation failed on the athlete performance dataset.
+
+Findings:
+
+- The latest metric plan first generated prohibited imports.
+- The repair attempt produced a custom `pointbiserialr` helper that still depended on Python import machinery, causing `KeyError: '__import__'` inside the sandbox.
+- A previous scale-rule edit accidentally made the dashboard planner system prompt a 3-item tuple instead of the required `(role, template)` pair.
+- Analytical insight generation could fail when compacted pandas outputs contained non-JSON-native values such as `Interval`.
+
+Changes made:
+
+- Fixed the dashboard planner prompt tuple by merging the scale guidance into the system prompt string.
+- Strengthened metric planner and repair prompts to avoid scipy/sklearn/statsmodels and import-dependent statistical helpers.
+- Directed correlation-style analyses toward pandas/numpy-native operations.
+- Increased metric plan repair attempts from 1 to 2.
+- Added safe builtins commonly needed by generated pandas code: `isinstance`, `zip`, `all`, and `any`.
+- Tightened generated-code validation to reject access to interpreter internals such as `__builtins__`, `__loader__`, and `__spec__`.
+- Added scipy/sklearn/statsmodels to blocked roots.
+- Made analytical brain output compaction JSON-safe.
+- Made dashboard critic output compaction JSON-safe as well, since it now receives analysis output samples.
+
+Verification:
+
+- `python -m py_compile app.py agents/metric_code_planner.py agents/dashboard_planner.py agents/dashboard_critic.py agents/analytical_brain.py dashboard_validation.py` passes.
+- `python -m unittest tests.test_generated_code_sanitizer tests.test_dashboard_scale_validation` passes.
+- Streamlit AppTest smoke check passes.
+
+Reason: Generated metric code should stay inside the deterministic pandas/numpy sandbox. When it needs statistical summaries, it must use safe dataframe operations rather than import-dependent helper functions.
+
+### Improved metric syntax repair diagnostics
+
+Investigated the current UI error:
+
+- `Could not generate dashboard: invalid syntax (<unknown>, line 62)`
+
+Finding: The metric planner produced invalid Python with a dangling `else:` block. The repair loop retried twice, but it did not pass the sanitized failing code back into the repair prompt, making it harder for the LLM to fix the exact syntax problem. The sanitizer could also raise `SyntaxError` while trying to prepare failing code for diagnostics.
+
+Changes made:
+
+- Updated `repair_metric_code_plan()` to accept `failing_code`.
+- Added explicit repair instructions: return plain top-level Python only, no markdown fences, no dangling `else/elif`, and complete every conditional block.
+- Updated `generate_executable_metric_plan()` to pass sanitized failing code into each repair attempt.
+- Added failed metric-plan artifact logging under `artifacts/metric_plans/*_failed_metric_plan_*.json`.
+- Changed `sanitize_generated_code()` so non-indentation syntax errors are returned for validation/repair instead of being raised inside the sanitizer.
+- Added a regression test covering dangling `else` behavior.
+
+Verification:
+
+- `python -m py_compile app.py agents/metric_code_planner.py agents/dashboard_planner.py agents/dashboard_critic.py agents/analytical_brain.py dashboard_validation.py` passes.
+- `python -m unittest tests.test_generated_code_sanitizer tests.test_dashboard_scale_validation` passes.
+- Streamlit AppTest smoke check passes.
+
+Reason: When generated code is syntactically invalid, the repair agent needs the exact failing code and the app needs a saved artifact for debugging. Syntax validation should fail in the validation step, not inside code cleanup.
+
+### Bug audit
+
+Reviewed the current working tree after the state/history, analytical brain, metric repair, and chart scale changes.
+
+Findings:
+
+- `dashboard_validation.py` rejects wide-form `multi_line` specs even though the dashboard planner and renderer support `metrics=[...]` without a single `y` column. Reproduced with a two-metric dataframe: validator returns `Line charts require both x and y fields.`
+- `dashboard_validation.py` does not warn for valid bar charts with many categories when `x` and `y` are both valid and `top_n` is missing. Reproduced with 30 categories: validator returns no issues.
+- Artifact history keys include semantic context, but artifact file paths are still based only on source filename and file hash. Reusing the same data file with a changed description can overwrite or restore stale semantic/dashboard/insight artifacts.
+- Failed metric plan artifacts use second-level timestamps, so multiple repair failures in the same second can overwrite each other.
+- Dashboard restore currently requires the saved validation artifact to exist even though it recomputes validation during restore. This can prevent otherwise usable dashboard + metric artifacts from being restored.
+
+Verification:
+
+- `python -m py_compile app.py agents/metric_code_planner.py agents/dashboard_planner.py agents/dashboard_critic.py agents/analytical_brain.py dashboard_validation.py` passes.
+- `python -m unittest tests.test_generated_code_sanitizer tests.test_dashboard_scale_validation` passes.
+- Added a small local reproduction for validator behavior; no source changes made during this audit.
+
+Reason: The remaining issues are mostly cross-agent contract mismatches rather than syntax errors. Fixing these should make dashboard generation and history restore feel much more predictable.
+
+### Fixed critic compaction crash and added contract tests
+
+Checked the current app log after dashboard generation still failed.
+
+Finding:
+
+- The latest failure was in the dashboard critic repair path, not the metric planner. The critic now receives `analysis_outputs` so it can make better chart repairs, but its compaction helper treated any pandas object with `head()` and `to_dict()` as a dataframe.
+- Pandas `Series` also has those methods, but `Series.to_dict()` does not accept `orient="records"`, causing: `TypeError: Series.to_dict() got an unexpected keyword argument 'orient'`.
+- The athlete metric outputs include Series outputs such as `injury_indicator_counts` and `data_quality_missing_counts`, so this crash was deterministic once dashboard validation triggered critic repair.
+
+Changes made:
+
+- Updated `agents/dashboard_critic.py` and `agents/analytical_brain.py` to use the dataframe record-sample path only when the output has dataframe-style `columns`.
+- Added `tests/test_analysis_output_compaction.py` for Series and DataFrame compaction.
+- Hardened dashboard validation so wide-form `multi_line` charts can use `metrics=[...]` without a single `y` field, matching the renderer contract.
+- Added validation for missing metric columns in chart specs.
+- Fixed the many-category bar warning so valid bar charts with no `top_n` are checked.
+- Changed failed metric-plan artifact paths to include a UUID suffix after a test showed fast retries can collide even with microsecond timestamps on Windows.
+- Added `tests/test_dashboard_contract_validation.py` and `tests/test_artifact_paths.py`.
+
+Verification:
+
+- `python -m py_compile app.py agents/metric_code_planner.py agents/dashboard_planner.py agents/dashboard_critic.py agents/analytical_brain.py dashboard_validation.py` passes.
+- `python -m unittest tests.test_generated_code_sanitizer tests.test_dashboard_scale_validation tests.test_analysis_output_compaction tests.test_dashboard_contract_validation tests.test_artifact_paths` passes: 12 tests.
+- Executed the saved athlete metric plan locally; it produced 15 outputs and both critic/analytical compaction handled the Series outputs.
+- `Invoke-WebRequest http://localhost:8501` returns 200.
+- Streamlit AppTest smoke check reports 0 exceptions.
+
+Reason: The app is now a multi-agent contract pipeline. Tests need to cover boundaries between agent output schemas, pandas runtime values, validation, repair, and artifact storage, not just individual functions.
+
+### Added tests for all agents
+
+Added agent-level regression tests that do not call external LLMs.
+
+Coverage added:
+
+- Semantic agent:
+  - Chain builder constructs with mocked OpenAI client.
+  - `generate_semantic_understanding()` sends compact metadata JSON and dataframe context into the chain.
+- Metric code planner:
+  - Chain builder constructs with mocked OpenAI client.
+  - `generate_metric_code_plan()` sends structured semantic JSON and dataframe context into the chain.
+- Dashboard planner:
+  - Chain builder constructs with mocked OpenAI client, catching prompt tuple regressions.
+  - `generate_dashboard_plan()` sends metadata, semantic understanding, metric plan JSON, dataframe context, and design guide.
+- Dashboard critic:
+  - Chain builder constructs with mocked OpenAI client.
+  - `repair_dashboard_plan()` sends compacted dataframe and Series analysis outputs, dashboard plan, validation report, and design guide.
+- Analytical brain:
+  - Chain builder constructs with mocked OpenAI client.
+  - `build_analytical_brain_input()` compacts analysis outputs into structured input.
+  - `generate_analytical_insights()` sends metadata, semantic output, metric plan, compact analysis outputs, dashboard plan, and validation report.
+
+Verification:
+
+- `python -m py_compile app.py agents/metric_code_planner.py agents/dashboard_planner.py agents/dashboard_critic.py agents/analytical_brain.py dashboard_validation.py tests/test_agents_contracts.py` passes.
+- `python -m unittest discover -s tests` passes: 18 tests.
+- `Invoke-WebRequest http://localhost:8501` returns 200.
+
+Reason: The safest way to test LLM agents here is to test the structured boundaries and payload plumbing with mocked chains, while keeping deterministic validation and pandas-output tests separate.

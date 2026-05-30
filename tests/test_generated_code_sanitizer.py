@@ -28,6 +28,18 @@ class GeneratedCodeSanitizerTest(unittest.TestCase):
         self.assertEqual(sanitized, "df_work = df.copy()\nanalysis_outputs = {}")
         ast.parse(sanitized)
 
+    def test_dangling_else_still_fails_ast_parse_for_repair_loop(self) -> None:
+        code = """
+        analysis_outputs = {}
+        else:
+            analysis_outputs['x'] = 1
+        """
+
+        sanitized = sanitize_generated_code(code)
+
+        with self.assertRaises(SyntaxError):
+            ast.parse(sanitized)
+
 
 if __name__ == "__main__":
     unittest.main()

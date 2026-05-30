@@ -146,7 +146,11 @@ def build_metric_code_planner_chain(model: str | None = None):
                 "agent's suggested questions and computes generally useful dashboard "
                 "metrics. Use only pandas/numpy-style dataframe operations. Do not "
                 "read files, write files, call APIs, plot charts, mutate global state, "
-                "or use eval/exec. Assume a pandas dataframe named df already exists. "
+                "or use eval/exec. Do not import modules. Do not use scipy, sklearn, "
+                "statsmodels, or custom statistical-test helpers that require import "
+                "machinery. For correlation-style outputs, use pandas/numpy operations "
+                "such as numeric encoding plus Series.corr/DataFrame.corr. "
+                "Assume a pandas dataframe named df already exists. "
                 "The code must create a dictionary named analysis_outputs and store "
                 "every table, series, or scalar result in that dictionary. Use only "
                 "columns that appear in the provided dataframe context, metadata, or "
@@ -229,6 +233,7 @@ def repair_metric_code_plan(
     semantic_understanding: SemanticUnderstanding,
     df_head: str,
     error_message: str,
+    failing_code: str = "",
     model: str | None = None,
 ) -> PandasMetricPlan:
     api_key = resolve_openai_api_key()
@@ -247,8 +252,14 @@ def repair_metric_code_plan(
                 "Preserve the original analytical intent, but fix the code and "
                 "structured output specs so they are internally consistent. Do not "
                 "read files, write files, call APIs, plot charts, use eval/exec, or "
-                "import modules. Assume df already exists. The code must create "
-                "analysis_outputs as a dictionary.",
+                "import modules. Do not use scipy, sklearn, statsmodels, or helper "
+                "functions that depend on Python import machinery. For correlation "
+                "analyses, use pandas/numpy-native operations. Assume df already exists. "
+                "The code must create analysis_outputs as a dictionary. Return plain "
+                "top-level Python statements only: no markdown fences, no prose, no "
+                "dangling else/elif blocks, and no code nested under a nonexistent "
+                "if/try/function block. Every if/else block must be syntactically "
+                "complete.",
             ),
             (
                 "human",
@@ -256,6 +267,7 @@ def repair_metric_code_plan(
                 "Dataframe context:\n{df_head}\n\n"
                 "Failed metric plan:\n{failed_plan_json}\n\n"
                 "Execution error:\n{error_message}\n\n"
+                "Sanitized failing code:\n{failing_code}\n\n"
                 "Return the repaired metric plan.",
             ),
         ]
@@ -267,6 +279,7 @@ def repair_metric_code_plan(
             "df_head": df_head,
             "failed_plan_json": failed_plan.model_dump_json(indent=2),
             "error_message": error_message,
+            "failing_code": failing_code,
         }
     )
 

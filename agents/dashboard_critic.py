@@ -18,6 +18,51 @@ from agents.semantic_understanding import (
 from dashboard_validation import DashboardValidationReport
 
 
+def json_safe(value: Any) -> Any:
+    if value is None:
+        return None
+    if isinstance(value, (str, int, float, bool)):
+        return value
+    if hasattr(value, "item"):
+        try:
+            return value.item()
+        except Exception:
+            pass
+    if hasattr(value, "isoformat"):
+        try:
+            return value.isoformat()
+        except Exception:
+            pass
+    return str(value)
+
+
+def compact_analysis_outputs(analysis_outputs: dict[str, Any]) -> dict[str, Any]:
+    compacted: dict[str, Any] = {}
+    for key, value in analysis_outputs.items():
+        if hasattr(value, "columns") and hasattr(value, "head") and hasattr(value, "to_dict"):
+            frame = value.head(20)
+            compacted[key] = {
+                "type": type(value).__name__,
+                "shape": list(getattr(value, "shape", [])),
+                "columns": [str(column) for column in getattr(value, "columns", [])],
+                "sample": [
+                    {str(k): json_safe(v) for k, v in row.items()}
+                    for row in frame.to_dict(orient="records")
+                ],
+            }
+        elif hasattr(value, "to_dict"):
+            sample = value.head(20).to_dict() if hasattr(value, "head") else value.to_dict()
+            compacted[key] = {
+                "type": type(value).__name__,
+                "sample": {str(k): json_safe(v) for k, v in sample.items()}
+                if isinstance(sample, dict)
+                else json_safe(sample),
+            }
+        else:
+            compacted[key] = json_safe(value)
+    return compacted
+
+
 class DashboardCritique(BaseModel):
     critique_summary: str = Field(
         description="Brief explanation of why the original dashboard needed repair."
@@ -66,6 +111,12 @@ def build_dashboard_critic_chain(model: str | None = None):
                 "no more than 3 question views, and table top_n values of 25 or "
                 "less. If many table views remain, keep only the ones that best "
                 "support decisions and move the rest to limitations. "
+                "If validation reports that a chart hides small differences because "
+                "the values are tightly clustered on a zero baseline, repair the "
+                "chart by setting value_axis_min and value_axis_max around the "
+                "observed range from the analysis output sample with padding, and include a scale_note that clearly "
+                "discloses the narrowed axis. Do not remove the chart solely for "
+                "this issue if an explicit scale note can make it readable and honest. "
                 "The repaired_dashboard_plan must be complete, compact, and should "
                 "not include charts mentioned in rejected_chart_titles unless they "
                 "have been changed to a safer table or fixed to address the exact "
@@ -77,6 +128,7 @@ def build_dashboard_critic_chain(model: str | None = None):
                 "Dataset metadata:\n{metadata_json}\n\n"
                 "Semantic understanding:\n{semantic_json}\n\n"
                 "Metric plan:\n{metric_plan_json}\n\n"
+                "Analysis outputs sample:\n{analysis_outputs_json}\n\n"
                 "Original dashboard plan:\n{dashboard_plan_json}\n\n"
                 "Validation report:\n{validation_report_json}\n\n"
                 "Dataframe context:\n{df_context}\n\n"
@@ -91,6 +143,7 @@ def repair_dashboard_plan(
     metadata: dict[str, Any],
     semantic_understanding: SemanticUnderstanding,
     metric_plan: PandasMetricPlan,
+    analysis_outputs: dict[str, Any],
     dashboard_plan: DashboardPlan,
     validation_report: DashboardValidationReport,
     df_context: str,
@@ -102,6 +155,7 @@ def repair_dashboard_plan(
             "metadata_json": compact_json(metadata),
             "semantic_json": semantic_understanding.model_dump_json(indent=2),
             "metric_plan_json": metric_plan.model_dump_json(indent=2),
+            "analysis_outputs_json": compact_json(compact_analysis_outputs(analysis_outputs)),
             "dashboard_plan_json": dashboard_plan.model_dump_json(indent=2),
             "validation_report_json": validation_report.model_dump_json(indent=2),
             "df_context": df_context,
