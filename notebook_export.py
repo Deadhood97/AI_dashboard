@@ -1,0 +1,252 @@
+from __future__ import annotations
+
+import json
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any
+
+import nbformat
+import pandas as pd
+from nbformat.v4 import new_code_cell, new_markdown_cell, new_notebook, new_output
+from pydantic import BaseModel
+
+from agents.analytical_brain import AnalyticalBrainResult
+from agents.dashboard_critic import DashboardCritique
+from agents.dashboard_planner import DashboardPlan
+from agents.metric_code_planner import PandasMetricPlan
+from agents.semantic_understanding import SemanticUnderstanding
+from dashboard_validation import DashboardValidationReport
+
+
+def _json_safe(value: Any) -> Any:
+    if value is None:
+        return None
+    if isinstance(value, (str, int, float, bool)):
+        return value
+    if hasattr(value, "item"):
+        try:
+            return value.item()
+        except Exception:
+            pass
+    if hasattr(value, "isoformat"):
+        try:
+            return value.isoformat()
+        except Exception:
+            pass
+    return str(value)
+
+
+def _model_json(model: BaseModel | None) -> str:
+    if model is None:
+        return "_Not available._"
+    return "```json\n" + model.model_dump_json(indent=2) + "\n```"
+
+
+def _json_block(data: Any) -> str:
+    return "```json\n" + json.dumps(data, indent=2, ensure_ascii=False, default=_json_safe) + "\n```"
+
+
+def compact_metadata_summary(metadata: dict[str, Any]) -> dict[str, Any]:
+    columns = []
+    for column in metadata.get("columns", []):
+        summary = {
+            "name": column.get("name"),
+            "pandas_dtype": column.get("pandas_dtype"),
+            "inferred_role": column.get("inferred_role"),
+            "null_percentage": column.get("null_percentage"),
+            "unique_count": column.get("unique_count"),
+        }
+        if "statistics" in column:
+            summary["statistics"] = column["statistics"]
+        elif column.get("top_values"):
+            summary["top_values"] = column["top_values"][:5]
+        columns.append(summary)
+    return {
+        "source_file": metadata.get("source_file"),
+        "row_count": metadata.get("row_count"),
+        "column_count": metadata.get("column_count"),
+        "dataset_description": metadata.get("dataset_description"),
+        "source": metadata.get("source"),
+        "columns": columns,
+    }
+
+
+def metadata_columns_frame(metadata: dict[str, Any]) -> pd.DataFrame:
+    rows = []
+    for column in metadata.get("columns", []):
+        stats = column.get("statistics", {}) or {}
+        rows.append(
+            {
+                "column": column.get("name"),
+                "dtype": column.get("pandas_dtype"),
+                "role": column.get("inferred_role"),
+                "null_pct": column.get("null_percentage"),
+                "unique": column.get("unique_count"),
+                "min": stats.get("min"),
+                "mean": stats.get("mean"),
+                "max": stats.get("max"),
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+def _dataframe_preview(value: Any, rows: int = 20) -> pd.DataFrame:
+    if isinstance(value, pd.DataFrame):
+        return value.head(rows)
+    if isinstance(value, pd.Series):
+        return value.head(rows).reset_index()
+    if isinstance(value, dict):
+        return pd.DataFrame([value])
+    if isinstance(value, (list, tuple)):
+        return pd.DataFrame(value).head(rows)
+    return pd.DataFrame({"value": [value]})
+
+
+def _plain_preview(value: Any) -> str:
+    if isinstance(value, pd.DataFrame):
+        return value.head(20).to_string(index=False)
+    if isinstance(value, pd.Series):
+        return value.head(20).to_string()
+    return json.dumps(value, indent=2, ensure_ascii=False, default=_json_safe)
+
+
+def _output_cell(key: str, value: Any) -> Any:
+    preview = _dataframe_preview(value)
+    html = preview.to_html(index=False)
+    text = _plain_preview(value)
+    return new_code_cell(
+        source=f"analysis_outputs[{key!r}]",
+        execution_count=1,
+        outputs=[
+            new_output(
+                output_type="display_data",
+                data={
+                    "text/plain": text,
+                    "text/html": html,
+                },
+                metadata={},
+            )
+        ],
+    )
+
+
+def build_dashboard_notebook(
+    metadata: dict[str, Any],
+    semantic_understanding: SemanticUnderstanding,
+    metric_plan: PandasMetricPlan,
+    analysis_outputs: dict[str, Any],
+    dashboard_plan: DashboardPlan,
+    validation_report: DashboardValidationReport,
+    critique: DashboardCritique | None,
+    analytical_insights: AnalyticalBrainResult | None,
+    df_preview: pd.DataFrame,
+    artifact_paths: dict[str, Any] | None = None,
+) -> Any:
+    artifact_paths = artifact_paths or {}
+    title = dashboard_plan.dashboard_title or "Dashboard Analysis Notebook"
+    cells = [
+        new_markdown_cell(
+            f"# {title}\n\n"
+            "This notebook was generated by Dashboard Studio as an audit trail for "
+            "the dashboard pipeline. Code cells show generated analytical code and "
+            "captured sandbox outputs from the app."
+        ),
+        new_markdown_cell(
+            "## Dataset Context\n\n"
+            f"- Source file: `{metadata.get('source_file', 'unknown')}`\n"
+            f"- Rows: `{metadata.get('row_count', 'unknown')}`\n"
+            f"- Columns: `{metadata.get('column_count', 'unknown')}`\n"
+            f"- Generated at: `{datetime.now(timezone.utc).isoformat()}`\n\n"
+            f"### Compact Metadata\n{_json_block(compact_metadata_summary(metadata))}"
+        ),
+        new_code_cell(
+            source="metadata_columns",
+            execution_count=1,
+            outputs=[
+                new_output(
+                    output_type="display_data",
+                    data={
+                        "text/plain": metadata_columns_frame(metadata).to_string(index=False),
+                        "text/html": metadata_columns_frame(metadata).to_html(index=False),
+                    },
+                    metadata={},
+                )
+            ],
+        ),
+        new_code_cell(
+            source="df.head()",
+            execution_count=1,
+            outputs=[
+                new_output(
+                    output_type="display_data",
+                    data={
+                        "text/plain": df_preview.head(20).to_string(index=False),
+                        "text/html": df_preview.head(20).to_html(index=False),
+                    },
+                    metadata={},
+                )
+            ],
+        ),
+        new_markdown_cell("## Semantic Understanding\n\n" + _model_json(semantic_understanding)),
+        new_markdown_cell(
+            "## Metric Plan\n\n"
+            f"{metric_plan.agent_summary}\n\n"
+            "### Output Contracts\n"
+            + _json_block([output.model_dump(mode="json") for output in metric_plan.analysis_outputs])
+        ),
+        new_code_cell(
+            source=metric_plan.pandas_code,
+            execution_count=1,
+            outputs=[
+                new_output(
+                    output_type="stream",
+                    name="stdout",
+                    text="Executed by Dashboard Studio's metric sandbox. Captured outputs are shown below.\n",
+                )
+            ],
+        ),
+        new_markdown_cell("## Executed Metric Outputs"),
+    ]
+
+    for key, value in analysis_outputs.items():
+        cells.append(new_markdown_cell(f"### `{key}`\n\nType: `{type(value).__name__}`"))
+        cells.append(_output_cell(key, value))
+
+    cells.extend(
+        [
+            new_markdown_cell("## Dashboard Plan\n\n" + _model_json(dashboard_plan)),
+            new_markdown_cell("## Validation Report\n\n" + _model_json(validation_report)),
+            new_markdown_cell("## Critic Repair Notes\n\n" + _model_json(critique)),
+            new_markdown_cell("## Analytical Brain\n\n" + _model_json(analytical_insights)),
+            new_markdown_cell(
+                "## Reproducibility\n\n"
+                "The dashboard and notebook render from saved structured artifacts. "
+                "Agent outputs may depend on model configuration at generation time.\n\n"
+                + _json_block({str(key): str(value) for key, value in artifact_paths.items() if value})
+            ),
+        ]
+    )
+
+    notebook = new_notebook(
+        cells=cells,
+        metadata={
+            "kernelspec": {
+                "display_name": "Python 3",
+                "language": "python",
+                "name": "python3",
+            },
+            "language_info": {"name": "python", "pygments_lexer": "ipython3"},
+            "dashboard_studio": {
+                "source_file": metadata.get("source_file"),
+                "file_sha256": metadata.get("file_sha256"),
+            },
+        },
+    )
+    nbformat.validate(notebook)
+    return notebook
+
+
+def write_dashboard_notebook(path: Path, notebook: Any) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    nbformat.write(notebook, path)
+    return path

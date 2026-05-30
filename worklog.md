@@ -1419,3 +1419,215 @@ Verification:
 - `Invoke-WebRequest http://localhost:8501` returns 200.
 
 Reason: The safest way to test LLM agents here is to test the structured boundaries and payload plumbing with mocked chains, while keeping deterministic validation and pandas-output tests separate.
+
+### Planned Jupyter notebook integration
+
+Goal: Add a notebook artifact and app view that explains how the dashboard was produced step by step, with generated code, executed outputs, validation results, and analytical-brain insights embedded.
+
+Planned architecture:
+
+- Add a notebook builder module, likely `notebook_export.py`, using `nbformat` to create `.ipynb` artifacts deterministically from saved pipeline state.
+- Save notebooks under `artifacts/notebooks/`, keyed by the same dashboard/history key used for metric plan, dashboard plan, validation, critique, and insights.
+- Generate a notebook after successful dashboard generation and restore it from history when compatible artifacts already exist.
+- Render the notebook inside the Streamlit app in a new tab, probably named `Notebook`, using a safe HTML conversion path or a structured in-app cell renderer.
+- Provide a download button for the `.ipynb` artifact.
+
+Notebook structure:
+
+1. Dataset context:
+   - Dataset source, row/column counts, description, schema summary, and a small dataframe preview.
+2. Semantic understanding:
+   - Domain, entities, dimensions, metrics, analytical goals, and suggested questions.
+3. Metric plan:
+   - Plain-language metric plan summary.
+   - Required columns.
+   - Output contracts.
+   - Generated pandas code as a code cell.
+4. Executed metric outputs:
+   - One section per `analysis_outputs` key.
+   - DataFrame/Series previews as executed outputs.
+   - Scalar outputs as markdown or display values.
+5. Dashboard plan:
+   - KPIs, chart specs, question views, assumptions, limitations, and scale notes.
+6. Validation and critic:
+   - Validation status, rejected components, warnings/errors, and critic repair notes when present.
+7. Analytical brain:
+   - Executive summary.
+   - Key insights with evidence, implication, recommendation, confidence, and impact.
+   - Watchouts and follow-up questions.
+8. Reproducibility footer:
+   - Artifact paths, generation timestamp, app version/commit if available, and caveats about external LLM generation.
+
+Execution model:
+
+- Do not let arbitrary notebook code run from the browser.
+- The app should execute metric code through the existing sandbox first, then serialize outputs into notebook cells.
+- The notebook can include generated code cells for transparency, but rendered outputs should come from the already validated app execution.
+- Optional later enhancement: use `nbclient` in a controlled local environment to execute only trusted generated notebook cells after the app sandbox passes.
+
+Product behavior:
+
+- The frontend dashboard remains the polished consumption view.
+- The notebook becomes the explanation and audit trail view.
+- Agents should write structured outputs once; both the dashboard and notebook render from those same artifacts.
+- History should prevent rerunning agents for the same dataset/context unless artifacts are stale or the user explicitly regenerates.
+
+Testing plan:
+
+- Unit test notebook generation from fake semantic, metric, dashboard, validation, critic, insight, and analysis-output objects.
+- Assert expected markdown/code cell order and key titles.
+- Assert DataFrame, Series, scalar, dict, and empty outputs render without errors.
+- Assert notebooks are keyed/restored consistently with dashboard history.
+- Add a Streamlit smoke test ensuring the Notebook tab renders when a notebook artifact exists.
+
+Reason: A notebook artifact gives the app a traceable analytical narrative without turning the frontend into a code notebook. It also creates a stable bridge for future agent orchestration and step-by-step debugging.
+
+### Implemented safe notebook sidecar
+
+Implemented the first notebook integration behind a feature flag.
+
+Changes made:
+
+- Added `notebook_export.py`.
+  - Builds renderable `.ipynb` notebooks with `nbformat`.
+  - Includes dataset context, dataframe preview, semantic understanding, metric plan, generated pandas code, executed metric outputs, dashboard plan, validation report, critic notes, analytical brain output, and reproducibility details.
+  - Embeds captured outputs as notebook code-cell outputs instead of executing notebook code in the app.
+- Added `NOTEBOOK_DIR = artifacts/notebooks`.
+- Added `ENABLE_NOTEBOOK_VIEW` feature flag.
+  - Default is disabled.
+  - Truthy values: `1`, `true`, `yes`, `on`.
+- Added optional `Notebook` tab in the Streamlit app only when the flag is enabled.
+- Added notebook artifact rendering in the app.
+  - Markdown cells render as markdown.
+  - Code cells render as Python code.
+  - HTML/text outputs render below code cells.
+  - Notebook download button provides the `.ipynb`.
+- Added notebook generation after successful dashboard generation.
+  - Generation is non-blocking: notebook errors are logged and do not fail the dashboard.
+  - Notebook generation uses existing saved pipeline artifacts and sandboxed metric outputs.
+- Added notebook restore support from saved dashboard artifacts.
+- Added `nbformat` to `requirements.txt`.
+- Added `ENABLE_NOTEBOOK_VIEW=false` to `.env.example`.
+
+Tests added:
+
+- `tests/test_notebook_export.py`
+  - Validates notebook structure.
+  - Confirms DataFrame, Series, and scalar outputs are represented.
+  - Confirms written `.ipynb` is valid JSON notebook format.
+- `tests/test_notebook_feature_flag.py`
+  - Confirms notebook view is disabled by default.
+  - Confirms explicit truthy/falsey values behave correctly.
+
+Verification:
+
+- `python -m py_compile app.py notebook_export.py agents/metric_code_planner.py agents/dashboard_planner.py agents/dashboard_critic.py agents/analytical_brain.py dashboard_validation.py` passes.
+- `python -m unittest discover -s tests` passes: 23 tests.
+- Streamlit AppTest smoke check passes with notebook disabled: 0 exceptions.
+- Streamlit AppTest smoke check passes with `ENABLE_NOTEBOOK_VIEW=true`: 0 exceptions.
+- `Invoke-WebRequest http://localhost:8501` returns 200.
+
+Reason: The notebook layer is an observer sidecar, not a participant in the core dashboard pipeline. The feature flag and non-blocking generation keep the current app path safe while adding an audit trail when enabled.
+
+### Enabled notebook feature flag locally
+
+Enabled notebook view for the local app.
+
+Changes made:
+
+- Set `ENABLE_NOTEBOOK_VIEW=true` in local `.env` without printing or modifying secrets.
+- Updated `app.py` startup to call `load_dotenv(dotenv_path=".env")` so app-level feature flags are loaded before rendering tabs.
+
+Verification:
+
+- Confirmed `notebook_view_enabled()` returns `True` after loading `.env`.
+- `python -m unittest discover -s tests` passes: 23 tests.
+- Streamlit AppTest smoke check passes: 0 exceptions.
+
+Reason: The feature flag existed, but the app needed to load `.env` at startup for the Notebook tab to appear reliably.
+
+### Fixed current dashboard and notebook rendering issues
+
+Investigated the current Dubai real estate dashboard and notebook output.
+
+Findings:
+
+- The dashboard validation report was `failed` because an unused metric output, `listing_counts_over_time`, declared wide columns (`n_listings_secondary`, `n_listings_offplan`, `n_listings_rental`) but the executed code produced a long-form output (`year_month`, `listing_type`, `listing_count`).
+- The actual dashboard used `listing_counts_time_series`, not the stale `listing_counts_over_time` output, so the unused output contract drift should not fail the rendered dashboard.
+- The app showed a success message even when validation status was `failed`.
+- The notebook appeared to show only metadata because the first Dataset Context section embedded a huge raw metadata JSON object, including long `unique_values` lists.
+- The “Top Communities by Avg Rental Price” chart was visually broken because horizontal bar rendering swapped x/y a second time. The dashboard spec already had numeric value on `x` and category on `y`; the renderer inverted it into `x=community`, `y=price`.
+
+Changes made:
+
+- Updated dashboard validation so unused metric-output schema drift is a warning, while referenced output drift still fails dashboard validation.
+- Updated dashboard generation feedback:
+  - `failed` -> warning
+  - `passed_with_warnings` -> warning
+  - `passed` -> success
+- Compacted notebook metadata:
+  - Dataset Context now uses compact metadata.
+  - Added a `metadata_columns` output table.
+  - Removed huge raw `unique_values` dumps from the rendered notebook.
+- Rebuilt the current Dubai validation artifact and notebook artifact from saved pipeline state without rerunning agents.
+- Fixed horizontal bar rendering so numeric fields stay on x and category labels stay on y.
+- Added `tests/test_chart_rendering_contracts.py`.
+- Added regression coverage for unused metric-output schema drift.
+
+Verification:
+
+- Recomputed current Dubai validation status: `passed_with_warnings`.
+- Rebuilt current Dubai notebook: 39 cells, no raw `unique_values` dump.
+- `python -m unittest discover -s tests` passes: 25 tests.
+- Streamlit AppTest smoke check passes: 0 exceptions.
+- `Invoke-WebRequest http://localhost:8501` returns 200.
+
+Reason: Dashboard validation should distinguish between broken rendered outputs and stale unused declarations. The notebook should explain the pipeline without burying the user in raw metadata. Horizontal bar rendering must respect the dashboard spec's axis contract.
+
+### Fixed clipped line chart scales
+
+Investigated the overview chart "Secondary Price per Sqft Over Time".
+
+Finding:
+
+- The metric output had 76 monthly rows from `2020-01` through `2026-04`.
+- The dashboard chart spec manually set `value_axis_min=300` and `value_axis_max=380`.
+- Actual secondary prices later rise above `580`, so Plotly clipped most of the line outside the visible y-axis range.
+- The chart therefore showed only a small visible slice, making it look like the data ended around 2021.
+- The listing-count overview had the same class of issue: axis max was `9000`, while the data reached `9087`.
+
+Changes made:
+
+- Added validation that declared chart scales must not clip actual plotted values.
+- Added a regression test for line charts whose declared y-axis range hides data.
+- Removed manual scales from the current Dubai overview charts and rebuilt the saved dashboard validation + notebook artifacts.
+
+Verification:
+
+- Current Dubai validation status is now `passed_with_warnings`.
+- Remaining warning is only the unused metric-output schema drift for `listing_counts_over_time`.
+- `python -m unittest discover -s tests` passes: 26 tests.
+- Streamlit AppTest smoke check passes: 0 exceptions.
+
+Reason: Axis narrowing can be useful for tightly clustered data, but it must never silently hide part of the series. If a scale clips values, the validator should reject it before the dashboard renders.
+
+### Checked phishing rate chart code
+
+Investigated the "Phishing Rate by Email Subject" chart.
+
+Finding:
+
+- The chart uses `source_output_key="phishing_rate_by_subject"`.
+- Generated metric code groups by `subject`, counts total emails, sums `is_phishing`, and computes `phishing_rate = phishing_count / email_count`.
+- Executed output has 10 subjects:
+  - 5 subjects have phishing rate `1.0`.
+  - 5 subjects have phishing rate `0.0`.
+- The dashboard chart uses `top_n=10`, so it includes all subjects. The zero-rate subjects render as bars with height zero, leaving only rotated labels on the x-axis.
+
+Interpretation:
+
+- The calculation is not broken; it reflects a very strong synthetic relationship between subject lines and the phishing label.
+- The visualization is awkward because zero-height bars are visually absent while labels remain.
+- A better dashboard treatment would show the top phishing subjects plus `email_count`/`phishing_count`, or use a table for all subjects with counts and rates.
+
+Reason: The issue is chart usefulness rather than code execution. The model selected a technically valid bar chart, but the binary 0/1 pattern makes the output look strange without counts or a table.

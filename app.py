@@ -4,6 +4,7 @@ import ast
 import hashlib
 import json
 import logging
+import os
 import shutil
 import re
 import tempfile
@@ -46,6 +47,7 @@ from dashboard_validation import (
     kpi_is_rejected,
     validate_dashboard_plan,
 )
+from notebook_export import build_dashboard_notebook, write_dashboard_notebook
 from pandas.api.types import (
     is_bool_dtype,
     is_datetime64_any_dtype,
@@ -62,12 +64,18 @@ METRIC_PLAN_DIR = Path("artifacts") / "metric_plans"
 DASHBOARD_DIR = Path("artifacts") / "dashboard"
 CRITIQUE_DIR = Path("artifacts") / "critiques"
 INSIGHTS_DIR = Path("artifacts") / "insights"
+NOTEBOOK_DIR = Path("artifacts") / "notebooks"
 LOG_DIR = Path("artifacts") / "logs"
 APP_LOG_PATH = LOG_DIR / "app.log"
 KAGGLE_DOWNLOAD_DIR = Path("artifacts") / "kaggle_downloads"
 MAX_OVERVIEW_CHARTS = 2
 MAX_QUESTION_VIEWS = 3
 MAX_TABLE_ROWS = 25
+
+
+def notebook_view_enabled() -> bool:
+    value = os.getenv("ENABLE_NOTEBOOK_VIEW", "").strip().lower()
+    return value in {"1", "true", "yes", "on"}
 
 
 def inject_global_styles() -> None:
@@ -358,6 +366,54 @@ def render_artifact_path(label: str, path: Any) -> None:
         st.caption(f"{label}: `{path}`")
 
 
+def render_notebook_artifact(path: Path | str | None) -> None:
+    if not path:
+        render_empty_state(
+            "No notebook yet",
+            "Generate the dashboard to create the explanatory notebook artifact.",
+        )
+        return
+
+    notebook_path = Path(path)
+    if not notebook_path.exists():
+        st.warning("Notebook artifact is missing. Regenerate the dashboard to rebuild it.")
+        return
+
+    try:
+        notebook = json.loads(notebook_path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        st.error(f"Could not read notebook artifact: {exc}")
+        return
+
+    render_artifact_path("Notebook", notebook_path)
+    st.download_button(
+        "Download notebook",
+        data=notebook_path.read_bytes(),
+        file_name=notebook_path.name,
+        mime="application/x-ipynb+json",
+    )
+
+    for cell in notebook.get("cells", []):
+        cell_type = cell.get("cell_type")
+        source = "".join(cell.get("source", []))
+        if cell_type == "markdown":
+            st.markdown(source)
+            continue
+        if cell_type == "code":
+            if source:
+                st.code(source, language="python")
+            for output in cell.get("outputs", []):
+                data = output.get("data", {})
+                if "text/html" in data:
+                    html = "".join(data["text/html"])
+                    st.markdown(html, unsafe_allow_html=True)
+                elif "text/plain" in data:
+                    text = "".join(data["text/plain"])
+                    st.text(text)
+                elif output.get("text"):
+                    st.text("".join(output["text"]))
+
+
 def configure_logging() -> logging.Logger:
     LOG_DIR.mkdir(parents=True, exist_ok=True)
     logger = logging.getLogger("smart_dashboarding")
@@ -610,6 +666,7 @@ def clear_dataset_session_state() -> None:
         "dashboard_critique_path",
         "analytical_insights",
         "analytical_insights_path",
+        "notebook_path",
         "dataset_restored_from_history",
         "semantic_restored_from_history",
         "dashboard_restored_from_history",
@@ -742,6 +799,7 @@ def restore_dashboard_from_artifacts(metadata: dict[str, Any], dashboard_key: st
             if insights_path.exists()
             else None
         )
+        notebook_path = notebook_path_for(metadata)
     except Exception:
         logger.exception("Could not restore dashboard artifacts for %s", metadata["source_file"])
         return False
@@ -755,6 +813,7 @@ def restore_dashboard_from_artifacts(metadata: dict[str, Any], dashboard_key: st
     st.session_state["dashboard_critique_path"] = critique_path if critique else None
     st.session_state["analytical_insights"] = analytical_insights
     st.session_state["analytical_insights_path"] = insights_path if analytical_insights else None
+    st.session_state["notebook_path"] = notebook_path if notebook_path.exists() else None
     st.session_state["metric_plan"] = metric_plan
     st.session_state["metric_plan_key"] = dashboard_key
     st.session_state["metric_plan_path"] = metric_plan_path
@@ -1093,6 +1152,12 @@ def insights_path_for(metadata: dict[str, Any]) -> Path:
     return INSIGHTS_DIR / f"{dataset_slug}_{file_hash}_analytical_insights.json"
 
 
+def notebook_path_for(metadata: dict[str, Any]) -> Path:
+    file_hash = str(metadata["file_sha256"])[:12]
+    dataset_slug = slugify_filename(str(metadata["source_file"]))
+    return NOTEBOOK_DIR / f"{dataset_slug}_{file_hash}_analysis_notebook.ipynb"
+
+
 def save_analytical_insights(
     metadata: dict[str, Any],
     insights: AnalyticalBrainResult,
@@ -1101,6 +1166,33 @@ def save_analytical_insights(
     insights_path = insights_path_for(metadata)
     insights_path.write_text(insights.model_dump_json(indent=2), encoding="utf-8")
     return insights_path
+
+
+def save_dashboard_notebook_artifact(
+    metadata: dict[str, Any],
+    semantic_understanding: SemanticUnderstanding,
+    metric_plan: PandasMetricPlan,
+    analysis_outputs: dict[str, Any],
+    dashboard_plan: DashboardPlan,
+    validation_report: DashboardValidationReport,
+    critique: DashboardCritique | None,
+    analytical_insights: AnalyticalBrainResult | None,
+    df_preview: pd.DataFrame,
+    artifact_paths: dict[str, Any],
+) -> Path:
+    notebook = build_dashboard_notebook(
+        metadata=metadata,
+        semantic_understanding=semantic_understanding,
+        metric_plan=metric_plan,
+        analysis_outputs=analysis_outputs,
+        dashboard_plan=dashboard_plan,
+        validation_report=validation_report,
+        critique=critique,
+        analytical_insights=analytical_insights,
+        df_preview=df_preview,
+        artifact_paths=artifact_paths,
+    )
+    return write_dashboard_notebook(notebook_path_for(metadata), notebook)
 
 
 def data_integrity_summary(df: pd.DataFrame) -> dict[str, Any]:
@@ -1527,6 +1619,12 @@ def apply_declared_value_axis_scale(
         fig.update_yaxes(range=[spec.value_axis_min, spec.value_axis_max])
 
 
+def bar_plot_fields(spec: DashboardChartSpec, x: str, y: str) -> tuple[str, str]:
+    if spec.orientation == "horizontal":
+        return x, y
+    return x, y
+
+
 def render_text_output(output: Any) -> None:
     if isinstance(output, dict):
         cols = st.columns(min(len(output), 4) or 1)
@@ -1581,11 +1679,12 @@ def render_chart(
         x = spec.x or spec.dimension
         y = spec.y or spec.metric
         if spec.chart_type == "bar" and x in chart_data.columns and y in chart_data.columns:
+            bar_x, bar_y = bar_plot_fields(spec, x, y)
             if spec.orientation == "horizontal":
-                fig = px.bar(chart_data, x=y, y=x, orientation="h")
+                fig = px.bar(chart_data, x=bar_x, y=bar_y, orientation="h")
                 apply_declared_value_axis_scale(fig, spec, axis="x")
             else:
-                fig = px.bar(chart_data, x=x, y=y, color=spec.color if spec.color in chart_data.columns else None)
+                fig = px.bar(chart_data, x=bar_x, y=bar_y, color=spec.color if spec.color in chart_data.columns else None)
                 apply_declared_value_axis_scale(fig, spec, axis="y")
             fig.update_layout(margin=dict(l=8, r=8, t=12, b=8), legend_title_text="")
             with chart_container:
@@ -1766,6 +1865,7 @@ def render_semantic_understanding(result: SemanticUnderstanding) -> None:
 
 
 def main() -> None:
+    load_dotenv(dotenv_path=".env")
     st.set_page_config(page_title="Smart AI Dashboarding", layout="wide")
     inject_global_styles()
 
@@ -1955,9 +2055,16 @@ def main() -> None:
     if st.session_state.get("dataset_restored_from_history"):
         st.caption("Restored the latest prepared dataset from history.")
 
-    tab_data, tab_columns, tab_semantic, tab_dashboard, tab_metadata = st.tabs(
-        ["Preview", "Schema", "Understanding", "Dashboard", "Artifacts"]
+    tabs = st.tabs(
+        ["Preview", "Schema", "Understanding", "Dashboard", "Notebook", "Artifacts"]
+        if notebook_view_enabled()
+        else ["Preview", "Schema", "Understanding", "Dashboard", "Artifacts"]
     )
+    if notebook_view_enabled():
+        tab_data, tab_columns, tab_semantic, tab_dashboard, tab_notebook, tab_metadata = tabs
+    else:
+        tab_data, tab_columns, tab_semantic, tab_dashboard, tab_metadata = tabs
+        tab_notebook = None
 
     with tab_data:
         render_section_heading("Preview", "Dataset Rows")
@@ -2081,6 +2188,7 @@ def main() -> None:
                     )
                     analytical_insights = None
                     insights_path = None
+                    notebook_path = None
                     try:
                         analytical_input = build_analytical_brain_input(
                             metadata=metadata,
@@ -2098,6 +2206,32 @@ def main() -> None:
                             "Analytical brain failed: filename=%s",
                             source_filename,
                         )
+                    if notebook_view_enabled():
+                        try:
+                            notebook_path = save_dashboard_notebook_artifact(
+                                metadata=metadata,
+                                semantic_understanding=existing_semantic,
+                                metric_plan=metric_plan,
+                                analysis_outputs=analysis_outputs,
+                                dashboard_plan=dashboard_plan,
+                                validation_report=validation_report,
+                                critique=critique,
+                                analytical_insights=analytical_insights,
+                                df_preview=df.head(20),
+                                artifact_paths={
+                                    "metadata": metadata_path,
+                                    "metric_plan": metric_plan_path,
+                                    "dashboard_plan": dashboard_path,
+                                    "validation_report": validation_path,
+                                    "critique": critique_path,
+                                    "analytical_insights": insights_path,
+                                },
+                            )
+                        except Exception:
+                            logger.exception(
+                                "Notebook artifact generation failed: filename=%s",
+                                source_filename,
+                            )
             except Exception as exc:
                 metric_plan_path = locals().get("metric_plan_path")
                 logger.exception(
@@ -2119,6 +2253,7 @@ def main() -> None:
                 st.session_state["dashboard_critique_path"] = critique_path
                 st.session_state["analytical_insights"] = analytical_insights
                 st.session_state["analytical_insights_path"] = insights_path
+                st.session_state["notebook_path"] = notebook_path
                 st.session_state["metric_plan"] = metric_plan
                 st.session_state["metric_plan_key"] = dashboard_key
                 st.session_state["metric_plan_path"] = metric_plan_path
@@ -2134,7 +2269,12 @@ def main() -> None:
                     insights_path,
                     validation_report.status,
                 )
-                st.success("Dashboard generated.")
+                if validation_report.status == "failed":
+                    st.warning("Dashboard generated, but validation found issues.")
+                elif validation_report.status == "passed_with_warnings":
+                    st.warning("Dashboard generated with validation warnings.")
+                else:
+                    st.success("Dashboard generated.")
 
         existing_dashboard = st.session_state.get("dashboard_plan")
         existing_dashboard_key = st.session_state.get("dashboard_plan_key")
@@ -2156,6 +2296,8 @@ def main() -> None:
             render_artifact_path("Critique", critique_path)
             insights_path = st.session_state.get("analytical_insights_path")
             render_artifact_path("Analytical insights", insights_path)
+            notebook_path = st.session_state.get("notebook_path")
+            render_artifact_path("Notebook", notebook_path)
             if st.session_state.get("dashboard_restored_from_history"):
                 st.caption("Restored dashboard artifacts from history; agents were not rerun.")
             analysis_outputs = st.session_state.get("analysis_outputs")
@@ -2197,6 +2339,11 @@ def main() -> None:
                         )
         elif semantic_is_current:
             render_empty_state("No dashboard yet", "Generate the dashboard after semantic understanding is current.")
+
+    if tab_notebook is not None:
+        with tab_notebook:
+            render_section_heading("Audit Trail", "Notebook")
+            render_notebook_artifact(st.session_state.get("notebook_path"))
 
     with tab_metadata:
         render_section_heading("Artifacts", "Stored Metadata")

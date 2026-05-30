@@ -114,6 +114,24 @@ def _has_declared_scale(spec: DashboardChartSpec) -> bool:
     )
 
 
+def _declared_scale_clips_values(
+    table: pd.DataFrame,
+    columns: list[str],
+    spec: DashboardChartSpec,
+) -> tuple[bool, float | None, float | None]:
+    if spec.value_axis_min is None or spec.value_axis_max is None:
+        return False, None, None
+    numeric_range = _numeric_range(table, columns)
+    if numeric_range is None:
+        return False, None, None
+    data_min, data_max = numeric_range
+    return (
+        data_min < float(spec.value_axis_min) or data_max > float(spec.value_axis_max),
+        data_min,
+        data_max,
+    )
+
+
 def _issue(
     severity: IssueSeverity,
     component: IssueComponent,
@@ -135,17 +153,20 @@ def _issue(
 def validate_metric_outputs(
     metric_plan: PandasMetricPlan,
     analysis_outputs: dict[str, Any],
+    referenced_output_keys: set[str] | None = None,
 ) -> list[ValidationIssue]:
     issues: list[ValidationIssue] = []
+    referenced_output_keys = referenced_output_keys or set()
     for spec in metric_plan.analysis_outputs:
+        severity: IssueSeverity = "error" if spec.key in referenced_output_keys else "warning"
         if spec.key not in analysis_outputs:
             issues.append(
                 _issue(
-                    "error",
+                    severity,
                     "metric_output",
                     spec.key,
                     "Declared metric output was not produced by the executed code.",
-                    "Repair the metric plan so every declared output key is populated.",
+                    "Repair the metric plan if this output is used by the dashboard, or remove the unused declaration.",
                     spec.key,
                 )
             )
@@ -192,11 +213,11 @@ def validate_metric_outputs(
         if missing_columns:
             issues.append(
                 _issue(
-                    "error",
+                    severity,
                     "metric_output",
                     spec.key,
                     f"Metric output is missing expected columns: {missing_columns}.",
-                    "Repair the metric plan output spec or generated pandas code so they match.",
+                    "Repair the metric plan output spec or generated pandas code if this output is used by the dashboard.",
                     spec.key,
                 )
             )
@@ -347,6 +368,18 @@ def validate_chart_spec(
                         spec.source_output_key,
                     )
                 )
+            scale_clips, data_min, data_max = _declared_scale_clips_values(table, y_columns, spec)
+            if scale_clips:
+                issues.append(
+                    _issue(
+                        "error",
+                        "chart",
+                        spec.title,
+                        f"Declared y-axis scale clips data values; data range is {data_min:.2f} to {data_max:.2f}.",
+                        "Expand value_axis_min/value_axis_max to include the full data range or remove the declared scale.",
+                        spec.source_output_key,
+                    )
+                )
 
     if spec.chart_type == "bar":
         if not x or not y:
@@ -429,6 +462,18 @@ def validate_chart_spec(
                         spec.title,
                         "Bar values are tightly clustered, so a zero-baseline chart hides the meaningful differences.",
                         "Repair the chart spec with value_axis_min, value_axis_max, and a scale_note that discloses the narrowed axis.",
+                        spec.source_output_key,
+                    )
+                )
+            scale_clips, data_min, data_max = _declared_scale_clips_values(table, [y], spec)
+            if scale_clips:
+                issues.append(
+                    _issue(
+                        "error",
+                        "chart",
+                        spec.title,
+                        f"Declared value-axis scale clips data values; data range is {data_min:.2f} to {data_max:.2f}.",
+                        "Expand value_axis_min/value_axis_max to include the full data range or remove the declared scale.",
                         spec.source_output_key,
                     )
                 )
@@ -546,7 +591,12 @@ def validate_dashboard_plan(
     metric_plan: PandasMetricPlan,
     analysis_outputs: dict[str, Any],
 ) -> DashboardValidationReport:
-    issues = validate_metric_outputs(metric_plan, analysis_outputs)
+    referenced_output_keys = {kpi.source_output_key for kpi in dashboard_plan.kpis}
+    referenced_output_keys.update(chart.source_output_key for chart in dashboard_plan.overview_charts)
+    referenced_output_keys.update(
+        question_view.chart.source_output_key for question_view in dashboard_plan.question_views
+    )
+    issues = validate_metric_outputs(metric_plan, analysis_outputs, referenced_output_keys)
     rejected_chart_titles: list[str] = []
     rejected_kpi_titles: list[str] = []
 

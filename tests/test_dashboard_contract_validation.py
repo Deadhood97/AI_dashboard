@@ -3,7 +3,12 @@ import unittest
 import pandas as pd
 
 from agents.dashboard_planner import DashboardChartSpec
-from dashboard_validation import validate_chart_spec
+from agents.metric_code_planner import (
+    AnalysisOutputSpec,
+    DashboardMetricSpec,
+    PandasMetricPlan,
+)
+from dashboard_validation import validate_chart_spec, validate_dashboard_plan
 
 
 class DashboardContractValidationTests(unittest.TestCase):
@@ -76,6 +81,76 @@ class DashboardContractValidationTests(unittest.TestCase):
         issues = validate_chart_spec(spec, outputs)
 
         self.assertTrue(any("many categories" in issue.message for issue in issues))
+
+    def test_unused_metric_output_schema_drift_is_warning_not_failure(self):
+        from tests.test_agents_contracts import sample_dashboard_plan
+
+        metric_plan = PandasMetricPlan(
+            agent_summary="Test metric contract drift.",
+            required_columns=["group", "score"],
+            dashboard_metrics=[
+                DashboardMetricSpec(
+                    name="Used score",
+                    business_purpose="Show used score.",
+                    calculation="Average score by group.",
+                    output_key="used_output",
+                    required_columns=["group", "score"],
+                    missing_data_strategy="Drop missing rows.",
+                )
+            ],
+            question_analyses=[],
+            analysis_outputs=[
+                AnalysisOutputSpec(
+                    key="used_output",
+                    output_type="dataframe",
+                    semantic_role="categorical_comparison",
+                    columns=["Training_Intensity", "Fatigue_Score"],
+                    recommended_views=["bar_chart"],
+                    description="Used dashboard output.",
+                    render_hint="Bar chart.",
+                ),
+                AnalysisOutputSpec(
+                    key="unused_output",
+                    output_type="dataframe",
+                    semantic_role="categorical_comparison",
+                    columns=["wide_a", "wide_b"],
+                    recommended_views=["table"],
+                    description="Unused output with stale schema.",
+                    render_hint="Table.",
+                ),
+            ],
+            pandas_code="analysis_outputs = {}",
+            assumptions=[],
+            limitations=[],
+        )
+        dashboard_plan = sample_dashboard_plan()
+        outputs = {
+            "used_output": pd.DataFrame(
+                {
+                    "Training_Intensity": ["High", "Low"],
+                    "Fatigue_Score": [95, 40],
+                }
+            ),
+            "unused_output": pd.DataFrame(
+                {
+                    "long_name": ["wide_a", "wide_b"],
+                    "value": [1, 2],
+                }
+            ),
+        }
+        dashboard_plan.kpis[0].source_output_key = "used_output"
+        dashboard_plan.overview_charts[0].source_output_key = "used_output"
+        dashboard_plan.question_views[0].chart.source_output_key = "used_output"
+
+        report = validate_dashboard_plan(dashboard_plan, metric_plan, outputs)
+
+        self.assertEqual(report.status, "passed_with_warnings")
+        self.assertTrue(
+            any(
+                issue.component == "metric_output" and issue.severity == "warning"
+                for issue in report.issues
+            )
+        )
 
 
 if __name__ == "__main__":
