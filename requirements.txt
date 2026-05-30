@@ -1,5 +1,6 @@
 streamlit
 pandas
+kaggle
 langchain-core
 langchain-openai
 python-dotenv

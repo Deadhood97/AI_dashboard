@@ -81,7 +81,15 @@ Start Streamlit:
 streamlit run app.py
 ```
 
-The current app supports CSV upload, optional dataset description capture, explicit dataset submission, dataframe preview, basic column type analysis, and generated metadata storage in `artifacts/metadata/`.
+The current app supports CSV upload or direct Kaggle dataset import, optional dataset description capture, explicit dataset submission, dataframe preview, basic column type analysis, and generated metadata storage in `artifacts/metadata/`.
+
+To import from Kaggle, configure Kaggle authentication with one of the official options:
+
+```powershell
+kaggle auth login
+```
+
+Or set `KAGGLE_API_TOKEN` in `.env`. Legacy `KAGGLE_USERNAME` and `KAGGLE_KEY` credentials are also supported by the Kaggle package. In the app, choose `Kaggle dataset`, enter a dataset reference such as `owner/dataset-slug`, optionally enter a CSV filename, and click `Fetch from Kaggle`. Kaggle dataset metadata is stored as the dataset description automatically, and any additional notes are appended before metadata generation.
 
 The saved metadata includes a `schema` object with the user-provided dataset description and inferred column schema. This will be used later by the semantic understanding agent.
 

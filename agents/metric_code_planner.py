@@ -149,7 +149,14 @@ def build_metric_code_planner_chain(model: str | None = None):
                 "or use eval/exec. Assume a pandas dataframe named df already exists. "
                 "The code must create a dictionary named analysis_outputs and store "
                 "every table, series, or scalar result in that dictionary. Use only "
-                "columns that appear in df.head() or the semantic understanding. If "
+                "columns that appear in the provided dataframe context, metadata, or "
+                "semantic understanding. If category filters are needed, use exact "
+                "values from metadata unique_values/top_values or derive categories "
+                "dynamically from the dataframe; do not invent abbreviations or aliases "
+                "such as 'US' when the data may store 'United States'. If an analytical "
+                "question names entities but exact dataframe values are uncertain, build "
+                "a defensible top-entity or latest-year ranking from available data "
+                "instead of filtering to possibly nonexistent labels. If "
                 "needed, include defensive column checks and date/numeric conversion. "
                 "When converting columns, create a working copy such as df_work and "
                 "use the converted columns in all downstream calculations. "
@@ -177,6 +184,16 @@ def build_metric_code_planner_chain(model: str | None = None):
                 "column, value column, and entity column. For multi-metric trends, "
                 "prefer tidy long-form outputs with columns like year, metric_name, "
                 "metric_value, and optional entity. "
+                "For rankings based on averages, ratings, scores, or prices, always "
+                "include a count/sample-size column and apply a defensible minimum "
+                "sample-size filter before presenting a top-ranked chart. If the "
+                "dataset is large, use at least 5 records per ranked group unless "
+                "the metadata proves a different threshold is better. Do not present "
+                "one-record categories as 'top' performers without a visible warning "
+                "or table fallback. For high-cardinality text columns such as "
+                "descriptions, do not output the full raw text table as a dashboard "
+                "view; create summary statistics, representative samples, or modeling "
+                "readiness counts instead. "
                 "Return a structured plan that other agents can read and an app can "
                 "render: dashboard metric specs, per-question analysis specs, output "
                 "specs, assumptions, limitations, and pandas code.",
@@ -184,7 +201,7 @@ def build_metric_code_planner_chain(model: str | None = None):
             (
                 "human",
                 "Semantic understanding JSON:\n{semantic_json}\n\n"
-                "Dataframe head:\n{df_head}\n\n"
+                "Dataframe context:\n{df_head}\n\n"
                 "Generate the pandas metric plan and code.",
             ),
         ]
@@ -236,7 +253,7 @@ def repair_metric_code_plan(
             (
                 "human",
                 "Semantic understanding:\n{semantic_json}\n\n"
-                "Dataframe head:\n{df_head}\n\n"
+                "Dataframe context:\n{df_head}\n\n"
                 "Failed metric plan:\n{failed_plan_json}\n\n"
                 "Execution error:\n{error_message}\n\n"
                 "Return the repaired metric plan.",

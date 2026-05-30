@@ -876,3 +876,288 @@ Added `repair_metric_code_plan()`, which sends the failed plan, semantic underst
 Result: Dashboard generation now attempts to generate a metric plan, execute it, and if execution fails, ask the agent to repair the full structured plan once before surfacing the error.
 
 Reason: The scope of possible pandas code failures is broad, so the system should use intelligent repair rather than accumulating one-off hardcoded checks.
+
+### Audited nonsensical dashboard charts
+
+Inspected the generated dashboard artifacts and the screenshot showing the year-over-year renewable consumption and fossil-vs-renewable scatter charts.
+
+Findings:
+
+- The year-over-year chart showed only points around year 2000 because `top_n` was applied after sorting rows by year. This selected the first 10 rows, not the top 10 countries/entities.
+- The scatter plot collapsed to fossil share 0 and renewable share 100 because `top_n` plus x-axis sorting selected one extreme corner of the data rather than a representative comparison.
+- The metric agent was receiving only `df.head()`, which is not enough context for country/category values. This lets it guess labels such as `US` even when the dataset may store `United States`.
+- A KPI titled "latest year" could still use `max`, which returns the highest historical value rather than the latest timestamp value.
+
+Reason: The problem was not only chart choice. The app was treating row limits, category/entity limits, and sampling as the same operation, which made valid-looking specs render misleading charts.
+
+### Improved dashboard chart limiting and agent context
+
+Updated metadata to include categorical `top_values` and full `unique_values` when the cardinality is reasonable.
+
+Added saved uploaded CSV copies under `artifacts/datasets/` so future debugging can replay a dashboard generation instead of relying only on in-memory Streamlit state.
+
+Changed agent context from only `df.head()` to a richer dataframe context that includes dataset size, description, column metadata, value summaries, and the first rows.
+
+Updated metric planner instructions to use exact category values from metadata or derive entities dynamically, rather than inventing aliases.
+
+Updated dashboard planner instructions so `top_n` means categories/entities, not time-series rows, and so scatter plots are not reduced by extreme sorting.
+
+Changed renderer behavior:
+
+- multi-line/entity charts keep full timelines for selected entities
+- scatter charts use a deterministic representative sample instead of sorting into an edge case
+- tabular/bar charts still use ranked top-N behavior where that makes sense
+- "latest" KPIs now prefer the latest temporal row over a generic max aggregation
+
+Reason: The dashboard should preserve analytical meaning first, then limit visual complexity. The previous implementation limited visual complexity by cutting rows, which destroyed the meaning of the charts.
+
+### Full dashboard pipeline audit
+
+Audited the latest generated dashboard screenshot, saved dashboard JSON, saved metric plan JSON, app renderer, agent schemas, prompts, logs, and artifact storage.
+
+Critical findings:
+
+- Dashboard chart specs are too weak. They say `x`, `y`, `color`, `top_n`, and `source_output_key`, but they do not say whether the output is aggregated, what grain it has, what the intended entity is, or what a valid visual should look like.
+- The metric planner can emit wide or tidy dataframes with multiple analytical dimensions, but the dashboard planner can still request one overloaded line chart for all of it.
+- The renderer trusts chart specs too much. It does not reject charts with too many series, mixed grains, unreadable legends, single-year timelines, or extreme axis collapse.
+- The repair loop only handles execution failure. It does not handle semantic failure, misleading output, unreadable charts, empty charts, or low-quality dashboard design.
+- The current artifacts did not include the uploaded CSV for the dashboard run, so the exact bad dashboard could not be replayed after the fact. Uploaded CSV persistence has now been added for future runs.
+- CLI paths in the agent modules still use simple `df.head()` context, while the Streamlit path now uses richer dataframe context. This creates inconsistent behavior between app and command-line testing.
+- The dashboard UI presents every generated overview and question view. There is no ranking, pruning, or quality gate before display.
+
+Root cause:
+
+The system has intelligent planning agents, but no dashboard quality control layer. The app validates "can this execute?" and "can Plotly draw something?", but not "is this a meaningful chart?" or "does this answer the analytical question?"
+
+Recommended architecture change:
+
+1. Add deterministic metric-output validation immediately after metric execution.
+2. Add deterministic dashboard-spec validation before rendering.
+3. Add a dashboard critic/validator agent that reviews validation summaries and asks for repaired plans when the visuals are not analytically useful.
+4. Add a quality gate that hides or converts failed charts to tables with a visible warning.
+5. Persist validation reports alongside metric plans and dashboard plans.
+
+Reason: The app should not treat generated dashboard plans as trusted UI. Generated plans should be proposals that must pass structural, statistical, and semantic checks before display.
+
+### Added dashboard validation pipeline
+
+Created `dashboard_validation.py` with structured validation models and deterministic checks.
+
+Validation now checks:
+
+- declared metric outputs exist
+- metric outputs are not unexpectedly empty
+- metric output specs match actual output columns
+- KPI source outputs exist
+- chart source outputs exist
+- chart x/y columns exist
+- line charts have at least two x-axis values
+- line charts do not exceed the allowed visible series count
+- line charts do not ignore extra categorical dimensions with multiple values
+- bar charts have usable x/y fields
+- scatter plots use numeric axes with meaningful variance
+- scatter plots avoid excessive color legends
+
+Integrated validation into the dashboard generation flow.
+
+Result:
+
+- every generated dashboard now receives a `DashboardValidationReport`
+- validation reports are saved under `artifacts/dashboard/*_dashboard_validation.json`
+- validation status is logged with dashboard generation
+- invalid KPI cards are hidden
+- invalid charts are hidden before rendering
+- rejected chart sections show the validation error and suggested fix instead of plotting misleading visuals
+
+Reason: The dashboard planner can propose charts, but the app must treat those proposals as untrusted until they pass quality checks.
+
+### Tightened dashboard planner against validation rules
+
+Updated the dashboard planner prompt to avoid charts that will fail validation.
+
+Rules added:
+
+- do not plot outputs with extra categorical dimensions unless those dimensions are filtered, aggregated, or represented visually
+- keep line and multi-line charts to 12 visible series or fewer
+- avoid timelines with fewer than two time values
+- avoid scatter plots unless both axes are numeric and varied
+- prefer ranked bars or tables when outputs have too many entities or mixed grains
+
+Reason: The validator blocks bad charts after planning, but the planner should also learn to propose cleaner dashboard specs up front.
+
+### Added dashboard critic agent
+
+Created `agents/dashboard_critic.py`.
+
+The critic agent receives:
+
+- dataset metadata
+- semantic understanding
+- metric plan
+- original dashboard plan
+- deterministic validation report
+- dataframe context
+
+It returns a structured `DashboardCritique` containing:
+
+- a critique summary
+- a complete repaired dashboard plan
+- repair notes
+- remaining risks
+
+Reason: The deterministic validator can identify invalid charts, but an LLM critic is better suited to rewriting the dashboard plan into a cleaner analytical experience.
+
+### Integrated critic repair loop
+
+Added `generate_validated_dashboard_plan()` to the app.
+
+Flow:
+
+1. dashboard planner generates an initial plan
+2. deterministic validator checks the plan against executed metric outputs
+3. if validation fails, the critic agent repairs the dashboard plan once
+4. deterministic validator checks the repaired plan again
+5. only the final validated plan is saved and rendered
+
+Critique artifacts are saved under `artifacts/critiques/*_dashboard_critique.json`.
+
+The UI now shows critic repair notes in an expander when a repair happened.
+
+Reason: This creates a feedback loop where bad generated dashboards are corrected before the user sees them, while keeping deterministic validation as the final quality gate.
+
+### Added dashboard design guide support
+
+Reviewed current dashboard-design guidance from Tableau, Microsoft Power BI, and dashboard design research, then created `docs/dashboard-design-guide.md` as a compact local guide for the dashboard agents.
+
+Connected the guide to both the dashboard planner and dashboard critic prompts.
+
+Reason: The dashboard agents should not rely only on generic LLM judgment. A stable local guide gives them explicit rules about purpose, layout, chart selection, readability, sample-size-aware rankings, and validation expectations.
+
+### Tightened dashboard quality validation
+
+Replayed the latest `winemag-data-first150k` dashboard artifacts and found that the original validation passed charts that were technically renderable but analytically weak.
+
+Problems found:
+
+- Average wine rating rankings used many categories without sample-size support.
+- Top winery rankings surfaced wineries with only one or two records.
+- Region and variety comparisons mixed unrelated grains in the same chart.
+- The description prediction view rendered a 150,930-row raw text table.
+
+Updated deterministic validation to reject:
+
+- Average/rating rankings without count support.
+- Top average/rating charts where visible winners have fewer than 5 records.
+- Mixed-grain bar charts using fields such as `group_type` or `region_type`.
+- Very large unlimited tables.
+- Large raw text tables.
+
+Also updated the metric planner prompt to require count/sample-size columns and minimum sample-size filtering for average/rating/score rankings.
+
+Verification: Replayed the old wine dashboard through the new validator. It now fails and rejects the weak charts instead of marking the dashboard as clean.
+
+Reason: The app needs to distinguish "Plotly can draw this" from "this is a meaningful dashboard." This change makes the quality gate much closer to what a human analyst would reject.
+
+### Tightened visible dashboard curation
+
+Reviewed the latest generated wine dashboard after the design-guide and validation changes.
+
+Finding: The output was still not good enough because the system had converted weak charts into too many table views. This made the dashboard technically safer but still hard to read.
+
+Changes made:
+
+- Fixed validation for scalar and dictionary metric outputs so usable KPI/text outputs are not incorrectly marked as missing columns.
+- Added unique Plotly chart keys to avoid duplicate Streamlit chart ID errors when similar charts are rendered.
+- Render dictionary/text outputs as compact metric summaries instead of raw one-row dataframes.
+- Capped table displays at 25 rows.
+- Capped visible overview charts at 2.
+- Capped visible question views at 3.
+- Prioritized chart-like views before table views when choosing which question views to show.
+- Updated the dashboard planner, critic, and design guide to explicitly prefer compact dashboards with limited tables.
+
+Verification: Replayed the latest wine dashboard artifacts. The visible output is now reduced to one overview bar chart, one winery bar chart, one modeling summary, and one 25-row table instead of a long wall of tables.
+
+Reason: A dashboard quality gate should improve the user-facing dashboard, not merely replace bad charts with too many tables.
+
+### Fixed Kaggle dashboard generation indentation failure
+
+Investigated why dashboard generation failed for the Kaggle housing affordability dataset.
+
+Finding: The failure happened before dashboard planning. The metric code planner returned pandas code with invalid leading indentation, and `validate_generated_code()` calls `ast.parse()` before execution. The initial metric plan failed with:
+
+- `IndentationError: unexpected indent`
+
+The automatic metric repair loop then returned code with the same syntax problem, so `generate_executable_metric_plan()` exhausted its repair attempt and the app showed that the dashboard could not be produced.
+
+Changes made:
+
+- Updated `sanitize_generated_code()` to dedent generated pandas code before validation.
+- Added support for stripping accidental markdown code fences from generated code.
+- Added an indentation fallback for uneven top-level indentation while preserving normal nested blocks.
+- Added `tests/test_generated_code_sanitizer.py` with standard-library `unittest` coverage for indented code and fenced code.
+
+Verification:
+
+- `python -m unittest tests.test_generated_code_sanitizer` passes.
+- `python -m py_compile app.py tests/test_generated_code_sanitizer.py` passes.
+
+Reason: The app should be strict about unsafe or invalid generated code, but it should tolerate harmless formatting artifacts from structured LLM output before deciding the metric plan is unusable.
+
+### Started frontend product polish pass
+
+Reviewed the current Streamlit UI from a product/design perspective.
+
+Finding: The dashboard output was becoming analytically strong, but the frontend still felt too much like a raw prototype. The main issues were:
+
+- source controls competed with the dashboard content
+- many generic info/success boxes made the flow feel noisy
+- chart titles duplicated Plotly titles
+- tabs were organized around implementation details rather than user jobs
+- the visual system relied almost entirely on Streamlit defaults
+
+Changes made:
+
+- Added a restrained visual system with custom spacing, tabs, buttons, metrics, sidebar styling, and section headers.
+- Renamed the product surface to `Dashboard Studio`.
+- Moved source selection, upload/Kaggle input, and dataset preparation into the sidebar.
+- Reframed main tabs as `Preview`, `Schema`, `Understanding`, `Dashboard`, and `Artifacts`.
+- Added polished empty states for unloaded datasets and incomplete analysis stages.
+- Replaced loud artifact/status captions with quieter artifact path helpers.
+- Added dataset summary metrics after preparation.
+- Removed duplicated Plotly chart titles and let the app-level chart headers carry the hierarchy.
+- Wrapped repeated dashboard charts in bordered containers to make the dashboard easier to scan.
+- Renamed dashboard sections from generic labels such as `Major KPIs` and `Overview Charts` to product-oriented sections like `Key Measures`, `Dataset Health`, `Overview`, and `Question Views`.
+
+Verification:
+
+- `python -m py_compile app.py` passes.
+- Streamlit AppTest smoke checks pass for both upload mode and Kaggle mode.
+
+Reason: The app should feel like a serious analytics workspace, not a collection of generated Streamlit controls. The frontend needs to communicate trust, workflow state, and dashboard hierarchy as clearly as the backend does.
+
+### Fixed broken frontend theme and first screen
+
+Reviewed a user-provided screenshot after the first frontend polish pass.
+
+Finding: The app was visually broken because Streamlit was running in dark theme while the custom CSS assumed a light product surface. This created unreadable sidebar controls, low-contrast labels, a dark empty main canvas, and an empty-state card that looked like a blank generated placeholder.
+
+Changes made:
+
+- Added `.streamlit/config.toml` to force a coherent light theme.
+- Updated global CSS so the app, sidebar, inputs, text areas, upload control, buttons, metrics, and empty state all use explicit product colors.
+- Removed the decorative kicker from the page header because it competed with Streamlit chrome and felt too marketing-like.
+- Reduced page title sizing, especially on mobile.
+- Rewrote the first-screen empty state into a clear onboarding panel with three workflow steps: load data, generate context, review output.
+- Added mobile-aware copy telling users to open the source panel from the top-left control.
+- Took desktop and mobile screenshots after the fix:
+  - `artifacts/screenshots/dashboard-studio-desktop-fixed.png`
+  - `artifacts/screenshots/dashboard-studio-mobile-fixed.png`
+
+Verification:
+
+- `python -m py_compile app.py` passes.
+- `python -m unittest tests.test_generated_code_sanitizer` passes.
+- Streamlit AppTest smoke check passes.
+- Playwright screenshots confirm readable desktop and mobile first screens.
+
+Reason: Best frontend practice for this product is not decorative polish. It is clear workflow state, strong contrast, calm density, mobile-safe instructions, and a layout that makes the next action obvious.

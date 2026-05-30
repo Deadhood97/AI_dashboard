@@ -20,6 +20,9 @@ from agents.semantic_understanding import (
 from agents.metric_code_planner import PandasMetricPlan
 
 
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+DASHBOARD_DESIGN_GUIDE_PATH = PROJECT_ROOT / "docs" / "dashboard-design-guide.md"
+
 Aggregation = Literal["sum", "mean", "median", "count", "nunique", "min", "max"]
 ChartType = Literal[
     "bar",
@@ -122,6 +125,18 @@ class DashboardPlan(BaseModel):
     limitations: list[str] = Field(description="Limitations of the planned dashboard.")
 
 
+def load_dashboard_design_guide() -> str:
+    if DASHBOARD_DESIGN_GUIDE_PATH.exists():
+        return DASHBOARD_DESIGN_GUIDE_PATH.read_text(encoding="utf-8")
+    return (
+        "Create compact dashboards for a clear audience and decision. Prefer a few "
+        "strong charts over many weak charts. Use bars for category comparison, "
+        "lines for real timelines, scatter plots only for varied numeric pairs, "
+        "and tables for detail. Reject high-cardinality raw tables, mixed-grain "
+        "charts, crowded legends, and average/rating rankings without sample size."
+    )
+
+
 def build_dashboard_planner_chain(model: str | None = None):
     api_key = resolve_openai_api_key()
     llm = ChatOpenAI(
@@ -137,9 +152,9 @@ def build_dashboard_planner_chain(model: str | None = None):
                 "system",
                 "You are a dashboard design agent for a data analytics app. "
                 "Create a compact, useful dashboard plan from metadata, semantic "
-                "understanding, metric planning output, and df.head(). Do not write executable code. "
+                "understanding, metric planning output, and dataframe context. Do not write executable code. "
                 "Choose only chart types from: bar, line, histogram, scatter, table. "
-                "Use only columns that appear in the metadata or dataframe head. "
+                "Use only columns that appear in the metadata or dataframe context. "
                 "Use the metric plan's dashboard metrics, question analyses, and "
                 "analysis output specs as the primary source for what the dashboard "
                 "should calculate and display. "
@@ -150,20 +165,37 @@ def build_dashboard_planner_chain(model: str | None = None):
                 "time on the x-axis and set sort_order to ascending. For country or "
                 "entity trend comparisons, use chart_type multi_line or line with a "
                 "color column. For scalar outputs, use KPI or text views. "
+                "Use top_n to limit categories or entities, not time-series rows. "
+                "Avoid top_n on scatter plots unless the referenced metric output is "
+                "already a meaningful ranked or sampled dataframe. "
+                "Never plot a dataframe that still has extra categorical dimensions "
+                "not represented by x, color, metrics, or a filter. For example, do "
+                "not plot country-year-source data as a source-only line chart unless "
+                "the country dimension has already been filtered or aggregated. "
+                "Line and multi-line charts should have no more than 12 visible series. "
+                "If an output has too many entities or multiple grains, prefer a "
+                "ranked bar chart or table, or ask for an aggregated metric output. "
+                "Do not create timeline charts from outputs with fewer than two time "
+                "values. Do not create scatter plots unless both axes are numeric and "
+                "have meaningful variance. "
                 "Ground data integrity notes only in evidence from metadata or "
-                "df.head(); do not claim missing values, duplicates, outliers, or "
+                "the dataframe context; do not claim missing values, duplicates, outliers, or "
                 "type problems unless the provided context supports that claim. "
                 "Prefer simple charts that can be rendered deterministically with "
                 "pandas and Plotly. Include a data integrity section, major KPIs, "
                 "overview charts, and views that answer the suggested analytical "
-                "questions. Avoid duplicate charts. Keep titles concise.",
+                "questions. Keep the plan compact: use no more than 2 overview "
+                "charts and no more than 3 question views. Tables should be "
+                "exception views or compact rankings with top_n of 25 or less. "
+                "Avoid duplicate charts. Keep titles concise.",
             ),
             (
                 "human",
+                "Dashboard design guide:\n{dashboard_design_guide}\n\n"
                 "Dataset metadata:\n{metadata_json}\n\n"
                 "Semantic understanding:\n{semantic_json}\n\n"
                 "Metric plan:\n{metric_plan_json}\n\n"
-                "Dataframe head:\n{df_head}\n\n"
+                "Dataframe context:\n{df_head}\n\n"
                 "Return a structured dashboard plan.",
             ),
         ]
@@ -185,6 +217,7 @@ def generate_dashboard_plan(
             "semantic_json": semantic_understanding.model_dump_json(indent=2),
             "metric_plan_json": metric_plan.model_dump_json(indent=2),
             "df_head": df_head,
+            "dashboard_design_guide": load_dashboard_design_guide(),
         }
     )
 
