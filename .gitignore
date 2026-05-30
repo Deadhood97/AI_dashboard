@@ -35,12 +35,19 @@ chroma/
 
 # JavaScript / frontend tooling, if added later
 node_modules/
+.next/
 dist/
 build/
 .vite/
+test-results/
+playwright-report/
+blob-report/
 
 # OS and editor files
 .DS_Store
 Thumbs.db
 .idea/
 .vscode/
+
+# TypeScript build cache
+*.tsbuildinfo

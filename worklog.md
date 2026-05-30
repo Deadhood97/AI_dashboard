@@ -1815,3 +1815,50 @@ Changes made:
   - Includes UI-overhaul and documentation priority ladders.
 
 Reason: The project has grown from a simple Streamlit prototype into a multi-agent analytics system. The docs need to help beginners run it while also helping future contributors understand the architecture.
+
+### Implemented high-priority read-only frontend shell
+
+Started the high-priority UI overhaul work after completing the critical API contract.
+
+Changes made:
+
+- Added `frontend/` Next.js app.
+  - React + TypeScript.
+  - TanStack Query for API state.
+  - Lucide icons.
+  - Custom CSS product shell.
+- Added read-only views:
+  - Run history sidebar.
+  - Top status bar with validation, row count, notebook availability.
+  - Dashboard plan view with KPI cards, overview chart specs, and question views.
+  - Insights view with analytical brain output and validation issues.
+  - Notebook preview from `.ipynb` JSON.
+  - Artifact availability view.
+- Added frontend API client for:
+  - `/api/runs`
+  - `/api/runs/latest`
+  - `/api/runs/{run_id}`
+  - `/api/runs/{run_id}/notebook`
+- Updated `.gitignore` to exclude `.next/`.
+- Added frontend run instructions to `README.md`.
+- Updated `docs/project-introduction.md` with high-priority frontend progress.
+
+Verification:
+
+- `npm.cmd install` completed in `frontend/`.
+- `npm.cmd run typecheck` passes.
+- `npm.cmd run build` passes.
+- `.\.venv\Scripts\python.exe -m unittest discover -s tests` passes: 31 tests.
+- Started FastAPI on `http://localhost:8000`; `/api/health` returns 200.
+- Started Next.js frontend on `http://localhost:3000`; HTTP request returns 200.
+- `/api/runs/latest` returns the latest artifact bundle.
+- Added Playwright end-to-end tests for dashboard, insights, notebook, artifacts, and mobile states.
+- `npm.cmd run test:e2e` passes: 5 browser tests.
+- Screenshots saved in `frontend/test-results/screenshots/`.
+
+Notes:
+
+- npm reported two moderate advisories in the JavaScript dependency tree. Did not run forced upgrades because that can introduce breaking changes.
+- Browser screenshots are now generated through Playwright test runs and ignored by git as runtime artifacts.
+
+Reason: The first product frontend should be read-only and artifact-backed. This lets us improve the UI without changing or risking the agent generation pipeline.

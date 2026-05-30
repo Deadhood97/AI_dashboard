@@ -318,6 +318,15 @@ The Streamlit app should remain available as an internal development/debug shell
 - Implement dashboard and notebook read-only views.
 - Add frontend chart guards.
 
+Current high-priority progress:
+
+- Added a read-only Next.js + React + TypeScript frontend under `frontend/`.
+- The shell reads `/api/runs`, `/api/runs/latest`, `/api/runs/{run_id}`, and `/api/runs/{run_id}/notebook`.
+- The first frontend surface includes run history, validation status, dashboard plan cards, insights, notebook preview, and artifact availability.
+- Generation actions are intentionally not included yet; the shell is an artifact viewer first.
+- Added Playwright browser coverage for dashboard, insights, notebook, artifacts, and mobile states.
+- The browser checks save screenshots under `frontend/test-results/screenshots/`.
+
 ### Medium
 
 - Add generation actions and job polling.
@@ -377,7 +386,9 @@ uvicorn api:app --reload --port 8000
 Tests:
 
 ```powershell
-python -m unittest discover -s tests
+.\.venv\Scripts\python.exe -m unittest discover -s tests
+cd frontend
+npm.cmd run test:e2e
 ```
 
 ---
@@ -434,4 +445,3 @@ The project is succeeding if:
 6. The system avoids unsupported claims.
 7. The user can trust the audit trail.
 8. Developers can extend the app without breaking the pipeline.
-

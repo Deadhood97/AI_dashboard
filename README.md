@@ -279,6 +279,67 @@ Invoke-WebRequest -UseBasicParsing http://localhost:8000/api/runs/latest
 
 ---
 
+## Run The New Frontend Shell
+
+The `ui-overhaul` branch includes an early read-only Next.js frontend in `frontend/`.
+
+It does not generate dashboards yet. It reads saved artifacts from the FastAPI API and renders a product-style workspace with:
+
+- run history
+- validation status
+- dashboard plan cards
+- analytical insights
+- notebook preview
+- artifact availability
+
+Start the API first:
+
+```powershell
+uvicorn api:app --reload --port 8000
+```
+
+In another terminal, install and run the frontend:
+
+```powershell
+cd frontend
+npm install
+npm run dev
+```
+
+If PowerShell blocks `npm`, use:
+
+```powershell
+npm.cmd install
+npm.cmd run dev
+```
+
+Open:
+
+```text
+http://localhost:3000
+```
+
+If your API is not running on port `8000`, set:
+
+```text
+NEXT_PUBLIC_API_BASE_URL=http://localhost:your_api_port
+```
+
+The frontend also has browser tests that capture screenshots of the main states:
+
+```powershell
+cd frontend
+npm.cmd run test:e2e
+```
+
+Screenshots are written to:
+
+```text
+frontend/test-results/screenshots/
+```
+
+---
+
 ## How The Pipeline Works
 
 The simplified workflow:
@@ -479,13 +540,22 @@ artifacts/logs/app.log
 Run everything:
 
 ```powershell
-python -m unittest discover -s tests
+.\.venv\Scripts\python.exe -m unittest discover -s tests
 ```
 
 Run a specific test file:
 
 ```powershell
-python -m unittest tests.test_api_contracts
+.\.venv\Scripts\python.exe -m unittest tests.test_api_contracts
+```
+
+Run the new frontend browser checks:
+
+```powershell
+cd frontend
+npm.cmd run typecheck
+npm.cmd run build
+npm.cmd run test:e2e
 ```
 
 Current tests cover:
@@ -498,6 +568,9 @@ Current tests cover:
 - feature flags
 - artifact path uniqueness
 - FastAPI read-only contracts
+- Next.js shell rendering
+- notebook preview rendering
+- insights, validation, artifacts, and mobile browser states
 
 ---
 
@@ -598,4 +671,3 @@ The app should always make it possible to answer:
 - What should I be careful about?
 
 That is why the project stores structured artifacts, validation reports, critic notes, and notebooks.
-
