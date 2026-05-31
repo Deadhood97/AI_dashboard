@@ -10,31 +10,17 @@ import pandas as pd
 from dotenv import load_dotenv
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_openai import ChatOpenAI
-from pydantic import BaseModel, Field
 
-
-DEFAULT_MODEL = "gpt-4.1-mini"
-
-
-class SemanticUnderstanding(BaseModel):
-    dataset_domain: str = Field(
-        description="The likely business or analytical domain of the dataset."
-    )
-    primary_entities: list[str] = Field(
-        description="Main real-world entities represented in the dataset."
-    )
-    important_dimensions: list[str] = Field(
-        description="Categorical, temporal, or segmentation fields useful for slicing data."
-    )
-    important_metrics: list[str] = Field(
-        description="Numeric measures or KPIs that are analytically important."
-    )
-    analytical_goals: list[str] = Field(
-        description="High-value analytical goals that fit the dataset."
-    )
-    suggested_questions: list[str] = Field(
-        description="Specific questions that can likely be answered from the dataset."
-    )
+from contracts.base import validate_contract
+from contracts.semantic import SemanticUnderstanding
+from core.model_config import (
+    DEFAULT_LLM_MAX_RETRIES,
+    DEFAULT_LLM_TIMEOUT_SECONDS,
+    DEFAULT_MODEL,
+    model_for_role,
+    resolve_llm_max_retries,
+    resolve_llm_timeout,
+)
 
 
 def resolve_openai_api_key() -> str:
@@ -55,9 +41,11 @@ def compact_json(data: dict[str, Any]) -> str:
 def build_semantic_understanding_chain(model: str | None = None):
     api_key = resolve_openai_api_key()
     llm = ChatOpenAI(
-        model=model or os.getenv("OPENAI_MODEL", DEFAULT_MODEL),
+        model=model_for_role("semantic", model),
         api_key=api_key,
         temperature=0,
+        timeout=resolve_llm_timeout(),
+        max_retries=resolve_llm_max_retries(),
     )
     structured_llm = llm.with_structured_output(SemanticUnderstanding)
 
@@ -88,12 +76,13 @@ def generate_semantic_understanding(
     model: str | None = None,
 ) -> SemanticUnderstanding:
     chain = build_semantic_understanding_chain(model=model)
-    return chain.invoke(
+    result = chain.invoke(
         {
             "metadata_json": compact_json(metadata),
             "df_head": df_head,
         }
     )
+    return validate_contract(SemanticUnderstanding, result)
 
 
 def load_metadata(path: Path) -> dict[str, Any]:

@@ -1,6 +1,6 @@
 import unittest
 
-from app import failed_metric_plan_path_for
+from core.artifacts import failed_metric_plan_path_for
 
 
 class ArtifactPathTests(unittest.TestCase):

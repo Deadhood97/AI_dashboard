@@ -2,139 +2,35 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any
 
 import pandas as pd
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_openai import ChatOpenAI
-from pydantic import BaseModel, Field
 
+from contracts.dashboard import (
+    Aggregation,
+    ChartType,
+    DashboardChartSpec,
+    DashboardKpiSpec,
+    DashboardPlan,
+    DashboardQuestionView,
+    Orientation,
+    SortOrder,
+)
+from contracts.base import validate_contract
+from contracts.metrics import PandasMetricPlan
+from contracts.semantic import SemanticUnderstanding
 from agents.semantic_understanding import (
-    DEFAULT_MODEL,
-    SemanticUnderstanding,
     compact_json,
     resolve_openai_api_key,
 )
-from agents.metric_code_planner import PandasMetricPlan
+from core.model_config import model_for_role, resolve_llm_max_retries, resolve_llm_timeout
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DASHBOARD_DESIGN_GUIDE_PATH = PROJECT_ROOT / "docs" / "dashboard-design-guide.md"
-
-Aggregation = Literal["sum", "mean", "median", "count", "nunique", "min", "max"]
-ChartType = Literal[
-    "bar",
-    "line",
-    "multi_line",
-    "histogram",
-    "scatter",
-    "table",
-    "kpi",
-    "text",
-]
-SortOrder = Literal["ascending", "descending"]
-Orientation = Literal["vertical", "horizontal"]
-
-
-class DashboardKpiSpec(BaseModel):
-    title: str = Field(description="Short user-facing KPI title.")
-    source_output_key: str = Field(
-        description="Metric plan analysis_outputs key used to render the KPI."
-    )
-    value_column: str | None = Field(
-        default=None,
-        description="Column or dictionary field to use when the output is not scalar.",
-    )
-    aggregation: Aggregation | None = Field(
-        default=None,
-        description="Optional aggregation to use when the output is tabular.",
-    )
-    rationale: str = Field(description="Why this KPI belongs on the dashboard.")
-
-
-class DashboardChartSpec(BaseModel):
-    title: str = Field(description="Short chart title.")
-    chart_type: ChartType = Field(description="Allowed Plotly chart type.")
-    source_output_key: str = Field(
-        description="Metric plan analysis_outputs key used as the chart data source."
-    )
-    x: str | None = Field(default=None, description="X-axis column.")
-    y: str | None = Field(default=None, description="Y-axis column.")
-    color: str | None = Field(
-        default=None,
-        description="Optional series/color column for grouped or multi-line views.",
-    )
-    metrics: list[str] = Field(
-        default_factory=list,
-        description="Optional list of metric columns for wide-form multi-metric charts.",
-    )
-    dimension: str | None = Field(
-        default=None,
-        description="Deprecated compatibility field for grouping, x-axis, or categories.",
-    )
-    metric: str | None = Field(
-        default=None,
-        description="Deprecated compatibility field for metric, y-axis, or distribution.",
-    )
-    aggregation: Aggregation | None = Field(
-        default=None,
-        description="Aggregation to apply when a chart needs grouped values.",
-    )
-    top_n: int | None = Field(
-        default=10,
-        description="Optional row/category limit for readability.",
-    )
-    sort_by: str | None = Field(default=None, description="Column to sort by before rendering.")
-    sort_order: SortOrder = Field(default="descending", description="Sort direction.")
-    orientation: Orientation = Field(default="vertical", description="Chart orientation.")
-    value_axis_min: float | None = Field(
-        default=None,
-        description="Optional explicit minimum for the chart's numeric value axis.",
-    )
-    value_axis_max: float | None = Field(
-        default=None,
-        description="Optional explicit maximum for the chart's numeric value axis.",
-    )
-    scale_note: str | None = Field(
-        default=None,
-        description="User-facing note explaining any non-zero or narrowed axis scale.",
-    )
-    question: str | None = Field(
-        default=None,
-        description="Analytical question this chart helps answer.",
-    )
-    rationale: str = Field(description="Why this chart type and fields were selected.")
-
-
-class DashboardQuestionView(BaseModel):
-    question: str = Field(description="Analytical question being answered.")
-    answer_strategy: str = Field(
-        description="How the dashboard view will answer the question."
-    )
-    chart: DashboardChartSpec = Field(description="Chart spec for this question.")
-
-
-class DashboardPlan(BaseModel):
-    dashboard_title: str = Field(description="User-facing dashboard title.")
-    dashboard_summary: str = Field(
-        description="Brief explanation of what the dashboard focuses on."
-    )
-    data_integrity_notes: list[str] = Field(
-        description="Dataset quality checks or concerns the dashboard should show."
-    )
-    kpis: list[DashboardKpiSpec] = Field(
-        description="Major KPI cards to render near the top of the dashboard."
-    )
-    overview_charts: list[DashboardChartSpec] = Field(
-        description="General-purpose charts useful for understanding the dataset."
-    )
-    question_views: list[DashboardQuestionView] = Field(
-        description="Views that answer semantic-agent analytical questions."
-    )
-    assumptions: list[str] = Field(description="Assumptions behind the dashboard plan.")
-    limitations: list[str] = Field(description="Limitations of the planned dashboard.")
 
 
 def load_dashboard_design_guide() -> str:
@@ -152,9 +48,11 @@ def load_dashboard_design_guide() -> str:
 def build_dashboard_planner_chain(model: str | None = None):
     api_key = resolve_openai_api_key()
     llm = ChatOpenAI(
-        model=model or os.getenv("OPENAI_MODEL", DEFAULT_MODEL),
+        model=model_for_role("dashboard", model),
         api_key=api_key,
         temperature=0,
+        timeout=resolve_llm_timeout(),
+        max_retries=resolve_llm_max_retries(),
     )
     structured_llm = llm.with_structured_output(DashboardPlan)
 
@@ -226,8 +124,10 @@ def generate_dashboard_plan(
     df_head: str,
     model: str | None = None,
 ) -> DashboardPlan:
+    semantic_understanding = validate_contract(SemanticUnderstanding, semantic_understanding)
+    metric_plan = validate_contract(PandasMetricPlan, metric_plan)
     chain = build_dashboard_planner_chain(model=model)
-    return chain.invoke(
+    result = chain.invoke(
         {
             "metadata_json": compact_json(metadata),
             "semantic_json": semantic_understanding.model_dump_json(indent=2),
@@ -236,6 +136,7 @@ def generate_dashboard_plan(
             "dashboard_design_guide": load_dashboard_design_guide(),
         }
     )
+    return validate_contract(DashboardPlan, result)
 
 
 def load_metadata(path: Path) -> dict[str, Any]:

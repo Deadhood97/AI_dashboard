@@ -1,0 +1,439 @@
+{
+  "$defs": {
+    "DashboardChartSpec": {
+      "properties": {
+        "aggregation": {
+          "anyOf": [
+            {
+              "enum": [
+                "sum",
+                "mean",
+                "median",
+                "count",
+                "nunique",
+                "min",
+                "max"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Aggregation to apply when a chart needs grouped values.",
+          "title": "Aggregation"
+        },
+        "chart_type": {
+          "description": "Allowed Plotly chart type.",
+          "enum": [
+            "bar",
+            "line",
+            "multi_line",
+            "histogram",
+            "scatter",
+            "table",
+            "kpi",
+            "text"
+          ],
+          "title": "Chart Type",
+          "type": "string"
+        },
+        "color": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Optional series/color column for grouped or multi-line views.",
+          "title": "Color"
+        },
+        "dimension": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Deprecated compatibility field for grouping, x-axis, or categories.",
+          "title": "Dimension"
+        },
+        "metric": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Deprecated compatibility field for metric, y-axis, or distribution.",
+          "title": "Metric"
+        },
+        "metrics": {
+          "description": "Optional list of metric columns for wide-form multi-metric charts.",
+          "items": {
+            "type": "string"
+          },
+          "title": "Metrics",
+          "type": "array"
+        },
+        "orientation": {
+          "default": "vertical",
+          "description": "Chart orientation.",
+          "enum": [
+            "vertical",
+            "horizontal"
+          ],
+          "title": "Orientation",
+          "type": "string"
+        },
+        "question": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Analytical question this chart helps answer.",
+          "title": "Question"
+        },
+        "rationale": {
+          "description": "Why this chart type and fields were selected.",
+          "title": "Rationale",
+          "type": "string"
+        },
+        "scale_note": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "User-facing note explaining any non-zero or narrowed axis scale.",
+          "title": "Scale Note"
+        },
+        "sort_by": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Column to sort by before rendering.",
+          "title": "Sort By"
+        },
+        "sort_order": {
+          "default": "descending",
+          "description": "Sort direction.",
+          "enum": [
+            "ascending",
+            "descending"
+          ],
+          "title": "Sort Order",
+          "type": "string"
+        },
+        "source_output_key": {
+          "description": "Metric plan analysis_outputs key used as the chart data source.",
+          "title": "Source Output Key",
+          "type": "string"
+        },
+        "title": {
+          "description": "Short chart title.",
+          "title": "Title",
+          "type": "string"
+        },
+        "top_n": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": 10,
+          "description": "Optional row/category limit for readability.",
+          "title": "Top N"
+        },
+        "value_axis_max": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Optional explicit maximum for the chart's numeric value axis.",
+          "title": "Value Axis Max"
+        },
+        "value_axis_min": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Optional explicit minimum for the chart's numeric value axis.",
+          "title": "Value Axis Min"
+        },
+        "x": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "X-axis column.",
+          "title": "X"
+        },
+        "y": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Y-axis column.",
+          "title": "Y"
+        }
+      },
+      "required": [
+        "title",
+        "chart_type",
+        "source_output_key",
+        "rationale"
+      ],
+      "title": "DashboardChartSpec",
+      "type": "object"
+    },
+    "DashboardKpiSpec": {
+      "properties": {
+        "aggregation": {
+          "anyOf": [
+            {
+              "enum": [
+                "sum",
+                "mean",
+                "median",
+                "count",
+                "nunique",
+                "min",
+                "max"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Optional aggregation to use when the output is tabular.",
+          "title": "Aggregation"
+        },
+        "rationale": {
+          "description": "Why this KPI belongs on the dashboard.",
+          "title": "Rationale",
+          "type": "string"
+        },
+        "source_output_key": {
+          "description": "Metric plan analysis_outputs key used to render the KPI.",
+          "title": "Source Output Key",
+          "type": "string"
+        },
+        "title": {
+          "description": "Short user-facing KPI title.",
+          "title": "Title",
+          "type": "string"
+        },
+        "value_column": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Column or dictionary field to use when the output is not scalar.",
+          "title": "Value Column"
+        }
+      },
+      "required": [
+        "title",
+        "source_output_key",
+        "rationale"
+      ],
+      "title": "DashboardKpiSpec",
+      "type": "object"
+    },
+    "DashboardPlan": {
+      "$id": "https://dashboard-studio.local/contracts/dashboard-plan.schema.json",
+      "properties": {
+        "assumptions": {
+          "description": "Assumptions behind the dashboard plan.",
+          "items": {
+            "type": "string"
+          },
+          "title": "Assumptions",
+          "type": "array"
+        },
+        "dashboard_summary": {
+          "description": "Brief explanation of what the dashboard focuses on.",
+          "title": "Dashboard Summary",
+          "type": "string"
+        },
+        "dashboard_title": {
+          "description": "User-facing dashboard title.",
+          "title": "Dashboard Title",
+          "type": "string"
+        },
+        "data_integrity_notes": {
+          "description": "Dataset quality checks or concerns the dashboard should show.",
+          "items": {
+            "type": "string"
+          },
+          "title": "Data Integrity Notes",
+          "type": "array"
+        },
+        "kpis": {
+          "description": "Major KPI cards to render near the top of the dashboard.",
+          "items": {
+            "$ref": "#/$defs/DashboardKpiSpec"
+          },
+          "title": "Kpis",
+          "type": "array"
+        },
+        "limitations": {
+          "description": "Limitations of the planned dashboard.",
+          "items": {
+            "type": "string"
+          },
+          "title": "Limitations",
+          "type": "array"
+        },
+        "overview_charts": {
+          "description": "General-purpose charts useful for understanding the dataset.",
+          "items": {
+            "$ref": "#/$defs/DashboardChartSpec"
+          },
+          "title": "Overview Charts",
+          "type": "array"
+        },
+        "question_views": {
+          "description": "Views that answer semantic-agent analytical questions.",
+          "items": {
+            "$ref": "#/$defs/DashboardQuestionView"
+          },
+          "title": "Question Views",
+          "type": "array"
+        }
+      },
+      "required": [
+        "dashboard_title",
+        "dashboard_summary",
+        "data_integrity_notes",
+        "kpis",
+        "overview_charts",
+        "question_views",
+        "assumptions",
+        "limitations"
+      ],
+      "title": "DashboardPlan",
+      "type": "object",
+      "x-contract-layer-version": "0.1.0"
+    },
+    "DashboardQuestionView": {
+      "properties": {
+        "answer_strategy": {
+          "description": "How the dashboard view will answer the question.",
+          "title": "Answer Strategy",
+          "type": "string"
+        },
+        "chart": {
+          "$ref": "#/$defs/DashboardChartSpec",
+          "description": "Chart spec for this question."
+        },
+        "question": {
+          "description": "Analytical question being answered.",
+          "title": "Question",
+          "type": "string"
+        }
+      },
+      "required": [
+        "question",
+        "answer_strategy",
+        "chart"
+      ],
+      "title": "DashboardQuestionView",
+      "type": "object"
+    }
+  },
+  "$id": "https://dashboard-studio.local/contracts/dashboard-critique.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "properties": {
+    "critique_summary": {
+      "description": "Brief explanation of why the original dashboard needed repair.",
+      "title": "Critique Summary",
+      "type": "string"
+    },
+    "remaining_risks": {
+      "description": "Known residual limitations after repair.",
+      "items": {
+        "type": "string"
+      },
+      "title": "Remaining Risks",
+      "type": "array"
+    },
+    "repair_notes": {
+      "description": "Specific changes made to improve dashboard quality.",
+      "items": {
+        "type": "string"
+      },
+      "title": "Repair Notes",
+      "type": "array"
+    },
+    "repaired_dashboard_plan": {
+      "$ref": "#/$defs/DashboardPlan",
+      "description": "A complete repaired dashboard plan that should pass validation."
+    }
+  },
+  "required": [
+    "critique_summary",
+    "repaired_dashboard_plan",
+    "repair_notes",
+    "remaining_risks"
+  ],
+  "title": "DashboardCritique",
+  "type": "object",
+  "x-contract-layer-version": "0.1.0"
+}

@@ -1,7 +1,7 @@
 import ast
 import unittest
 
-from app import sanitize_generated_code
+from core.metric_execution import sanitize_generated_code
 
 
 class GeneratedCodeSanitizerTest(unittest.TestCase):

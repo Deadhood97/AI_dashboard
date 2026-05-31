@@ -49,13 +49,14 @@ Given a CSV dataset, Dashboard Studio should answer:
 The current implementation has:
 
 - Streamlit app for the working UI
-- FastAPI read-only artifact API for the planned frontend migration
+- FastAPI artifact, ingestion, and generation API for the frontend migration
 - OpenAI-powered structured-output agents
 - pandas metric execution
 - dashboard validation rules
 - dashboard critic repair loop
 - analytical insight generation
 - notebook audit trail generation
+- shared agent handoff contracts
 - artifact history and restore
 - tests for agent contracts, chart validation, notebook export, and API contracts
 
@@ -113,18 +114,19 @@ flowchart TD
 
 | Layer | Responsibility | Current Implementation |
 | --- | --- | --- |
-| Data ingestion | Upload CSV or fetch Kaggle CSV | `app.py` |
-| Profiling | Infer schema, dtypes, stats, nulls | `app.py` |
+| Data ingestion | Upload CSV or fetch Kaggle CSV | `core/` backend modules |
+| Profiling | Infer schema, dtypes, stats, nulls | `core/` backend modules |
 | Semantic reasoning | Understand domain and columns | `agents/semantic_understanding.py` |
 | Metric planning | Generate analysis plan and pandas code | `agents/metric_code_planner.py` |
-| Execution | Run generated code safely | `app.py` sandbox helpers |
+| Execution | Run generated code safely | `core/` sandbox helpers |
 | Dashboard planning | Select KPIs/charts/question views | `agents/dashboard_planner.py` |
+| Contracts | Shared handoff language for agents and validators | `contracts/` |
 | Validation | Detect invalid/misleading dashboard specs | `dashboard_validation.py` |
 | Critique | Repair dashboard plans | `agents/dashboard_critic.py` |
 | Insights | Produce analytical narrative | `agents/analytical_brain.py` |
 | Notebook | Generate audit trail `.ipynb` | `notebook_export.py` |
 | Current UI | Interactive prototype UI | `app.py` Streamlit |
-| Future UI API | Read-only artifact contract | `api.py` |
+| Future UI API | Artifact, ingestion, and generation API | `api.py` |
 
 ---
 
@@ -206,6 +208,7 @@ Artifact folders:
 | `artifacts/datasets` | saved CSV copies |
 | `artifacts/semantic` | semantic understanding outputs |
 | `artifacts/metric_plans` | generated metric plans and failed attempts |
+| `artifacts/analysis_outputs` | compact serialized metric outputs for frontend rendering |
 | `artifacts/dashboard` | dashboard plans and validation reports |
 | `artifacts/critiques` | dashboard critic repair outputs |
 | `artifacts/insights` | analytical brain outputs |
@@ -320,16 +323,18 @@ The Streamlit app should remain available as an internal development/debug shell
 
 Current high-priority progress:
 
-- Added a read-only Next.js + React + TypeScript frontend under `frontend/`.
-- The shell reads `/api/runs`, `/api/runs/latest`, `/api/runs/{run_id}`, and `/api/runs/{run_id}/notebook`.
-- The first frontend surface includes run history, validation status, dashboard plan cards, insights, notebook preview, and artifact availability.
-- Generation actions are intentionally not included yet; the shell is an artifact viewer first.
+- Added a Next.js + React + TypeScript frontend under `frontend/`.
+- The shell reads `/api/runs`, `/api/runs/latest`, `/api/runs/{run_id}`, `/api/runs/{run_id}/notebook`, and `/api/jobs/{job_id}`.
+- The first frontend surface includes source import, run history, generation controls, validation status, rendered dashboard previews, insights, notebook preview, and artifact availability.
+- Added `POST /api/runs/{run_id}/generate` so the frontend can start the saved-run agent pipeline through FastAPI.
+- Added generation job polling so users can see queued/running/completed/failed status while artifacts are being created.
+- Added compact `analysis_outputs` payloads so the frontend can render KPIs, charts, and tables instead of only showing dashboard specs.
 - Added Playwright browser coverage for dashboard, insights, notebook, artifacts, and mobile states.
 - The browser checks save screenshots under `frontend/test-results/screenshots/`.
 
 ### Medium
 
-- Add generation actions and job polling.
+- Add richer generation controls, cancellation, and persisted job history.
 - Add history comparison.
 - Improve chart interactivity and table fallback.
 - Add user-friendly validation surfacing.

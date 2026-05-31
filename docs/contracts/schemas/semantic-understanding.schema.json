@@ -1,0 +1,62 @@
+{
+  "$id": "https://dashboard-studio.local/contracts/semantic-understanding.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "properties": {
+    "analytical_goals": {
+      "description": "High-value analytical goals that fit the dataset.",
+      "items": {
+        "type": "string"
+      },
+      "title": "Analytical Goals",
+      "type": "array"
+    },
+    "dataset_domain": {
+      "description": "The likely business or analytical domain of the dataset.",
+      "title": "Dataset Domain",
+      "type": "string"
+    },
+    "important_dimensions": {
+      "description": "Categorical, temporal, or segmentation fields useful for slicing data.",
+      "items": {
+        "type": "string"
+      },
+      "title": "Important Dimensions",
+      "type": "array"
+    },
+    "important_metrics": {
+      "description": "Numeric measures or KPIs that are analytically important.",
+      "items": {
+        "type": "string"
+      },
+      "title": "Important Metrics",
+      "type": "array"
+    },
+    "primary_entities": {
+      "description": "Main real-world entities represented in the dataset.",
+      "items": {
+        "type": "string"
+      },
+      "title": "Primary Entities",
+      "type": "array"
+    },
+    "suggested_questions": {
+      "description": "Specific questions that can likely be answered from the dataset.",
+      "items": {
+        "type": "string"
+      },
+      "title": "Suggested Questions",
+      "type": "array"
+    }
+  },
+  "required": [
+    "dataset_domain",
+    "primary_entities",
+    "important_dimensions",
+    "important_metrics",
+    "analytical_goals",
+    "suggested_questions"
+  ],
+  "title": "SemanticUnderstanding",
+  "type": "object",
+  "x-contract-layer-version": "0.1.0"
+}

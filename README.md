@@ -80,11 +80,13 @@ Planned frontend stack for the UI overhaul:
 ```text
 .
 |-- app.py                         # Streamlit app
-|-- api.py                         # FastAPI read-only artifact API
+|-- api.py                         # FastAPI artifact, ingestion, and generation API
+|-- core/                          # Shared backend ingestion, artifacts, execution, and pipeline helpers
 |-- dashboard_validation.py         # Dashboard and chart validation rules
 |-- notebook_export.py              # Builds .ipynb audit notebooks
 |-- requirements.txt                # Python dependencies
 |-- worklog.md                      # Running project worklog
+|-- contracts/                      # Shared agent handoff schemas
 |-- agents/
 |   |-- semantic_understanding.py   # Semantic dataset understanding agent
 |   |-- metric_code_planner.py      # Generates pandas metric plans/code
@@ -92,6 +94,9 @@ Planned frontend stack for the UI overhaul:
 |   |-- dashboard_critic.py         # Repairs weak dashboard plans
 |   |-- analytical_brain.py         # Produces final insights
 |-- docs/
+|   |-- contracts/
+|   |   |-- agent-contracts.md
+|   |   |-- schemas/
 |   |-- dashboard-design-guide.md
 |   |-- project-introduction.md
 |-- tests/
@@ -163,6 +168,17 @@ Open `.env` and add your OpenAI API key:
 
 ```text
 OPENAI_API_KEY=your_key_here
+```
+
+Optional model routing is role-based. `OPENAI_MODEL` is the shared fallback, and
+role-specific values let you upgrade code-heavy agents without changing every
+stage:
+
+```text
+OPENAI_MODEL=gpt-4.1-mini
+OPENAI_METRIC_CODE_MODEL=gpt-5.2
+OPENAI_METRIC_REPAIR_MODEL=gpt-5.2
+OPENAI_DASHBOARD_MODEL=gpt-5.2
 ```
 
 Never commit `.env`.
@@ -247,7 +263,7 @@ owner/dataset-slug
 
 ## Run The FastAPI Artifact API
 
-The API is currently read-only. It exposes saved artifacts for the future product frontend.
+The API exposes saved artifacts for the product frontend and now includes dataset import plus saved-run dashboard generation endpoints.
 
 Start it with:
 
@@ -269,8 +285,10 @@ GET /api/runs
 GET /api/runs/latest
 GET /api/runs/{run_id}
 GET /api/runs/{run_id}/notebook
+GET /api/jobs/{job_id}
 POST /api/datasets/upload
 POST /api/datasets/kaggle
+POST /api/runs/{run_id}/generate
 ```
 
 Example:
@@ -289,9 +307,11 @@ It can load datasets and read saved artifacts from the FastAPI API. It renders a
 
 - CSV upload
 - Kaggle dataset import
+- dashboard generation from a saved run
+- generation job status polling
 - run history
 - validation status
-- dashboard plan cards
+- rendered KPI, chart, and table previews from compact analysis outputs
 - analytical insights
 - notebook preview
 - artifact availability
@@ -388,6 +408,14 @@ This keeps the app more reliable than asking an LLM to directly invent chart val
 ---
 
 ## The Agents
+
+Shared agent handoff schemas live in:
+
+```text
+contracts/
+```
+
+The agent modules still re-export those models for compatibility, but the contract layer is the canonical place for schema definitions.
 
 ### Semantic Understanding Agent
 
@@ -525,6 +553,7 @@ Common artifact folders:
 | `artifacts/metadata/` | Dataset profile and index |
 | `artifacts/semantic/` | Semantic agent outputs |
 | `artifacts/metric_plans/` | Metric plan and generated pandas code |
+| `artifacts/analysis_outputs/` | Compact serialized metric outputs for frontend rendering |
 | `artifacts/dashboard/` | Dashboard plans and validation reports |
 | `artifacts/critiques/` | Dashboard critic repairs |
 | `artifacts/insights/` | Analytical brain outputs |
@@ -562,6 +591,12 @@ npm.cmd run build
 npm.cmd run test:e2e
 ```
 
+Compare two generated runs before and after model changes:
+
+```powershell
+.\.venv\Scripts\python.exe scripts\compare_model_runs.py BEFORE_RUN_ID AFTER_RUN_ID
+```
+
 Current tests cover:
 
 - agent payload contracts
@@ -571,8 +606,9 @@ Current tests cover:
 - notebook generation
 - feature flags
 - artifact path uniqueness
-- FastAPI read-only contracts
+- FastAPI artifact, ingestion, and generation contracts
 - Next.js shell rendering
+- rendered frontend charts from analysis output payloads
 - notebook preview rendering
 - insights, validation, artifacts, and mobile browser states
 
@@ -616,6 +652,8 @@ Also confirm the dataset reference looks like:
 owner/dataset-slug
 ```
 
+Some Kaggle datasets expose a CSV but download it as `name.csv.zip`. The importer extracts those archives automatically, including nested CSV members, and skips unsafe archive paths.
+
 ### Dashboard Looks Strange
 
 The app includes validation and critic repair, but generated dashboards can still be imperfect.
@@ -657,6 +695,8 @@ Start here:
 - `README.md`: beginner setup and usage
 - `docs/project-introduction.md`: detailed objectives, architecture, and agent communication
 - `docs/dashboard-design-guide.md`: dashboard quality rules
+- `docs/contracts/agent-contracts.md`: shared agent contract reference
+- `docs/contracts/schemas/`: exported JSON Schemas for contract payloads
 - `worklog.md`: ongoing project decisions and implementation notes
 
 ---

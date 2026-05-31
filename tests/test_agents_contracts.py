@@ -42,9 +42,12 @@ class FakeChain:
 
 
 class FakeLLM:
+    instances = []
+
     def __init__(self, *args, **kwargs):
         self.args = args
         self.kwargs = kwargs
+        self.__class__.instances.append(self)
 
     def with_structured_output(self, schema):
         return RunnableLambda(lambda payload: schema)
@@ -195,6 +198,66 @@ class AgentContractTests(unittest.TestCase):
                     with patch.object(module, "ChatOpenAI", FakeLLM):
                         self.assertIsNotNone(builder(model="test-model"))
 
+    def test_agent_llm_clients_use_timeout_and_retry_bounds(self):
+        modules_and_builders = [
+            (semantic_agent, semantic_agent.build_semantic_understanding_chain),
+            (metric_agent, metric_agent.build_metric_code_planner_chain),
+            (dashboard_agent, dashboard_agent.build_dashboard_planner_chain),
+            (critic_agent, critic_agent.build_dashboard_critic_chain),
+            (analytical_agent, analytical_agent.build_analytical_brain_chain),
+        ]
+
+        for module, builder in modules_and_builders:
+            with self.subTest(module=module.__name__):
+                FakeLLM.instances = []
+                with patch.object(module, "resolve_openai_api_key", return_value="test-key"):
+                    with patch.object(module, "ChatOpenAI", FakeLLM):
+                        builder(model="test-model")
+
+                self.assertEqual(len(FakeLLM.instances), 1)
+                llm = FakeLLM.instances[0]
+                self.assertEqual(llm.kwargs["timeout"], semantic_agent.DEFAULT_LLM_TIMEOUT_SECONDS)
+                self.assertEqual(llm.kwargs["max_retries"], semantic_agent.DEFAULT_LLM_MAX_RETRIES)
+
+    def test_agent_chain_builders_use_role_specific_models(self):
+        cases = [
+            (semantic_agent, semantic_agent.build_semantic_understanding_chain, "OPENAI_SEMANTIC_MODEL", "semantic-model"),
+            (metric_agent, metric_agent.build_metric_code_planner_chain, "OPENAI_METRIC_CODE_MODEL", "metric-code-model"),
+            (dashboard_agent, dashboard_agent.build_dashboard_planner_chain, "OPENAI_DASHBOARD_MODEL", "dashboard-model"),
+            (critic_agent, critic_agent.build_dashboard_critic_chain, "OPENAI_DASHBOARD_CRITIC_MODEL", "critic-model"),
+            (analytical_agent, analytical_agent.build_analytical_brain_chain, "OPENAI_INSIGHTS_MODEL", "insights-model"),
+        ]
+
+        for module, builder, env_var, expected_model in cases:
+            with self.subTest(module=module.__name__):
+                FakeLLM.instances = []
+                with patch.dict("os.environ", {env_var: expected_model}, clear=False):
+                    with patch.object(module, "resolve_openai_api_key", return_value="test-key"):
+                        with patch.object(module, "ChatOpenAI", FakeLLM):
+                            builder()
+
+                self.assertEqual(FakeLLM.instances[0].kwargs["model"], expected_model)
+
+    def test_metric_repair_agent_uses_repair_model(self):
+        class RepairFakeLLM(FakeLLM):
+            def with_structured_output(self, schema):
+                return RunnableLambda(lambda payload: sample_metric_plan())
+
+        RepairFakeLLM.instances = []
+        failed_plan = sample_metric_plan()
+        with patch.dict("os.environ", {"OPENAI_METRIC_REPAIR_MODEL": "metric-repair-model"}, clear=False):
+            with patch.object(metric_agent, "resolve_openai_api_key", return_value="test-key"):
+                with patch.object(metric_agent, "ChatOpenAI", RepairFakeLLM):
+                    chain = metric_agent.repair_metric_code_plan(
+                        failed_plan=failed_plan,
+                        semantic_understanding=sample_semantic(),
+                        df_head="context",
+                        error_message="broken",
+                    )
+
+        self.assertIsInstance(chain, PandasMetricPlan)
+        self.assertEqual(RepairFakeLLM.instances[0].kwargs["model"], "metric-repair-model")
+
     def test_semantic_agent_invokes_chain_with_metadata_json_and_dataframe_context(self):
         result = sample_semantic()
         fake_chain = FakeChain(result)
@@ -215,6 +278,49 @@ class AgentContractTests(unittest.TestCase):
             fake_chain.payload["df_head"],
             "| Training_Intensity | Fatigue_Score |",
         )
+
+    def test_agent_outputs_are_validated_from_raw_payloads(self):
+        cases = [
+            (
+                semantic_agent,
+                "build_semantic_understanding_chain",
+                semantic_agent.generate_semantic_understanding,
+                sample_semantic().model_dump(),
+                {"metadata": {"source_file": "athletes.csv"}, "df_head": "context"},
+                SemanticUnderstanding,
+            ),
+            (
+                metric_agent,
+                "build_metric_code_planner_chain",
+                metric_agent.generate_metric_code_plan,
+                sample_metric_plan().model_dump(),
+                {"semantic_understanding": sample_semantic().model_dump(), "df_head": "context"},
+                PandasMetricPlan,
+            ),
+            (
+                dashboard_agent,
+                "build_dashboard_planner_chain",
+                dashboard_agent.generate_dashboard_plan,
+                sample_dashboard_plan().model_dump(),
+                {
+                    "metadata": {"source_file": "athletes.csv"},
+                    "semantic_understanding": sample_semantic().model_dump(),
+                    "metric_plan": sample_metric_plan().model_dump(),
+                    "df_head": "context",
+                },
+                DashboardPlan,
+            ),
+        ]
+
+        for module, builder_name, generate, payload, kwargs, expected_type in cases:
+            with self.subTest(module=module.__name__):
+                with patch.object(module, builder_name, return_value=FakeChain(payload)):
+                    if module is dashboard_agent:
+                        with patch.object(module, "load_dashboard_design_guide", return_value="guide"):
+                            actual = generate(**kwargs)
+                    else:
+                        actual = generate(**kwargs)
+                self.assertIsInstance(actual, expected_type)
 
     def test_metric_agent_invokes_chain_with_structured_semantic_json(self):
         result = sample_metric_plan()
@@ -286,6 +392,58 @@ class AgentContractTests(unittest.TestCase):
         self.assertIn('"type": "Series"', fake_chain.payload["analysis_outputs_json"])
         self.assertIn("validation_report_json", fake_chain.payload)
 
+    def test_critic_output_is_validated_from_raw_payload(self):
+        payload = {
+            "critique_summary": "Added scale disclosure.",
+            "repaired_dashboard_plan": sample_dashboard_plan().model_dump(),
+            "repair_notes": ["Set value axis fields."],
+            "remaining_risks": ["Small differences need careful interpretation."],
+        }
+
+        with patch.object(critic_agent, "build_dashboard_critic_chain", return_value=FakeChain(payload)):
+            with patch.object(critic_agent, "load_dashboard_design_guide", return_value="guide"):
+                actual = critic_agent.repair_dashboard_plan(
+                    metadata={"source_file": "athletes.csv"},
+                    semantic_understanding=sample_semantic().model_dump(),
+                    metric_plan=sample_metric_plan().model_dump(),
+                    analysis_outputs={"fatigue_by_intensity": pd.DataFrame({"Fatigue_Score": [1]})},
+                    dashboard_plan=sample_dashboard_plan().model_dump(),
+                    validation_report=sample_validation_report().model_dump(),
+                    df_context="dataframe context",
+                )
+
+        self.assertIsInstance(actual, DashboardCritique)
+        self.assertIsInstance(actual.repaired_dashboard_plan, DashboardPlan)
+
+    def test_critic_repaired_chart_null_defaults_are_normalized(self):
+        repaired_plan = sample_dashboard_plan().model_dump()
+        repaired_plan["question_views"][0]["chart"]["orientation"] = None
+        repaired_plan["question_views"][0]["chart"]["sort_order"] = None
+        repaired_plan["question_views"][0]["chart"]["metrics"] = None
+        payload = {
+            "critique_summary": "Normalized defaults.",
+            "repaired_dashboard_plan": repaired_plan,
+            "repair_notes": ["Left optional chart defaults unset."],
+            "remaining_risks": [],
+        }
+
+        with patch.object(critic_agent, "build_dashboard_critic_chain", return_value=FakeChain(payload)):
+            with patch.object(critic_agent, "load_dashboard_design_guide", return_value="guide"):
+                actual = critic_agent.repair_dashboard_plan(
+                    metadata={"source_file": "athletes.csv"},
+                    semantic_understanding=sample_semantic(),
+                    metric_plan=sample_metric_plan(),
+                    analysis_outputs={"fatigue_by_intensity": pd.DataFrame({"Fatigue_Score": [1]})},
+                    dashboard_plan=sample_dashboard_plan(),
+                    validation_report=sample_validation_report(),
+                    df_context="dataframe context",
+                )
+
+        chart = actual.repaired_dashboard_plan.question_views[0].chart
+        self.assertEqual(chart.orientation, "vertical")
+        self.assertEqual(chart.sort_order, "descending")
+        self.assertEqual(chart.metrics, [])
+
     def test_analytical_brain_builds_structured_input_and_invokes_chain(self):
         fake_chain = FakeChain(sample_insights())
         analytical_input = build_analytical_brain_input(
@@ -316,6 +474,27 @@ class AgentContractTests(unittest.TestCase):
         self.assertIn('"source_file"', fake_chain.payload["metadata_json"])
         self.assertIn('"fatigue_by_intensity"', fake_chain.payload["analysis_outputs_json"])
         self.assertIn('"dashboard_title"', fake_chain.payload["dashboard_plan_json"])
+
+    def test_analytical_input_and_output_are_validated_from_raw_payloads(self):
+        analytical_input = build_analytical_brain_input(
+            metadata={"source_file": "athletes.csv"},
+            semantic_understanding=sample_semantic().model_dump(),
+            metric_plan=sample_metric_plan().model_dump(),
+            analysis_outputs={"fatigue_by_intensity": pd.DataFrame({"Fatigue_Score": [62.1]})},
+            dashboard_plan=sample_dashboard_plan().model_dump(),
+            validation_report=sample_validation_report().model_dump(),
+            df_context="dataframe context",
+        )
+
+        with patch.object(
+            analytical_agent,
+            "build_analytical_brain_chain",
+            return_value=FakeChain(sample_insights().model_dump()),
+        ):
+            result = analytical_agent.generate_analytical_insights(analytical_input.model_dump())
+
+        self.assertIsInstance(analytical_input, analytical_agent.AnalyticalBrainInput)
+        self.assertIsInstance(result, AnalyticalBrainResult)
 
 
 if __name__ == "__main__":

@@ -1,21 +1,22 @@
 from __future__ import annotations
 
-import os
 from typing import Any
 
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_openai import ChatOpenAI
-from pydantic import BaseModel, Field
 
-from agents.dashboard_planner import DashboardPlan, load_dashboard_design_guide
-from agents.metric_code_planner import PandasMetricPlan
+from contracts.base import validate_contract
+from contracts.critique import DashboardCritique
+from contracts.dashboard import DashboardPlan
+from contracts.metrics import PandasMetricPlan
+from contracts.semantic import SemanticUnderstanding
+from contracts.validation import DashboardValidationReport
+from agents.dashboard_planner import load_dashboard_design_guide
 from agents.semantic_understanding import (
-    DEFAULT_MODEL,
-    SemanticUnderstanding,
     compact_json,
     resolve_openai_api_key,
 )
-from dashboard_validation import DashboardValidationReport
+from core.model_config import model_for_role, resolve_llm_max_retries, resolve_llm_timeout
 
 
 def json_safe(value: Any) -> Any:
@@ -62,28 +63,14 @@ def compact_analysis_outputs(analysis_outputs: dict[str, Any]) -> dict[str, Any]
             compacted[key] = json_safe(value)
     return compacted
 
-
-class DashboardCritique(BaseModel):
-    critique_summary: str = Field(
-        description="Brief explanation of why the original dashboard needed repair."
-    )
-    repaired_dashboard_plan: DashboardPlan = Field(
-        description="A complete repaired dashboard plan that should pass validation."
-    )
-    repair_notes: list[str] = Field(
-        description="Specific changes made to improve dashboard quality."
-    )
-    remaining_risks: list[str] = Field(
-        description="Known residual limitations after repair."
-    )
-
-
 def build_dashboard_critic_chain(model: str | None = None):
     api_key = resolve_openai_api_key()
     llm = ChatOpenAI(
-        model=model or os.getenv("OPENAI_MODEL", DEFAULT_MODEL),
+        model=model_for_role("dashboard_critic", model),
         api_key=api_key,
         temperature=0,
+        timeout=resolve_llm_timeout(),
+        max_retries=resolve_llm_max_retries(),
     )
     structured_llm = llm.with_structured_output(DashboardCritique)
 
@@ -149,8 +136,12 @@ def repair_dashboard_plan(
     df_context: str,
     model: str | None = None,
 ) -> DashboardCritique:
+    semantic_understanding = validate_contract(SemanticUnderstanding, semantic_understanding)
+    metric_plan = validate_contract(PandasMetricPlan, metric_plan)
+    dashboard_plan = validate_contract(DashboardPlan, dashboard_plan)
+    validation_report = validate_contract(DashboardValidationReport, validation_report)
     chain = build_dashboard_critic_chain(model=model)
-    return chain.invoke(
+    result = chain.invoke(
         {
             "metadata_json": compact_json(metadata),
             "semantic_json": semantic_understanding.model_dump_json(indent=2),
@@ -162,3 +153,4 @@ def repair_dashboard_plan(
             "dashboard_design_guide": load_dashboard_design_guide(),
         }
     )
+    return validate_contract(DashboardCritique, result)

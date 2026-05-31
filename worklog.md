@@ -1902,3 +1902,594 @@ Verification:
 - Restarted the local API and confirmed `POST /api/datasets/upload` is registered.
 
 Reason: The new product frontend needs the same first-mile dataset workflow as the old Streamlit app; otherwise users land in a read-only artifact viewer with no obvious way to start.
+
+### Added generation actions and job polling to the new frontend
+
+Continued the UI-overhaul work by letting the Next.js frontend start the saved-run dashboard pipeline through FastAPI.
+
+Changes made:
+
+- Added FastAPI job models and an in-memory `JobManager`.
+- Added `POST /api/runs/{run_id}/generate`.
+  - Starts the semantic, metric, dashboard, validation, insights, and optional notebook pipeline for an existing saved run.
+  - Uses the saved dataset artifact instead of Streamlit session state.
+  - Writes artifacts through the FastAPI `ArtifactStore` paths.
+- Added `GET /api/jobs/{job_id}` for polling queued/running/completed/failed status.
+- Added frontend API client methods for generation and job polling.
+- Added a top-level generation action bar in the Next.js app.
+  - Shows artifact count before generation.
+  - Shows live stage/status while a generation job is running.
+  - Refreshes run, history, and notebook queries when the job completes.
+- Added API contract coverage for the generation endpoint with a fake generation runner.
+- Updated README and project introduction docs with the new endpoints and frontend behavior.
+
+Verification:
+
+- `python -m py_compile api.py` passes.
+- `python -m unittest tests.test_api_contracts` passes: 8 tests.
+- `python -m unittest discover -s tests` passes: 34 tests.
+- `npm.cmd run typecheck` passes.
+- `npm.cmd run build` passes.
+- FastAPI started on `http://127.0.0.1:8000`; `/api/health` returns 200.
+- Next.js started on `http://127.0.0.1:3000`; HTTP request returns 200.
+- `npm.cmd run test:e2e` passes: 6 browser tests.
+
+Note:
+
+- Attempted an additional Codex in-app browser check, but the Browser plugin did not expose an `iab` browser in this session. Playwright still verified the rendered local frontend.
+
+Reason: The product frontend now has a real path from dataset run to generated dashboard artifacts, rather than relying on Streamlit for all agent execution. Job polling gives the frontend a stable contract for long-running agent work.
+
+### Added shared contract layer for agent handoffs
+
+Implemented the first contract-layer pass so agents and deterministic pipeline steps share one canonical schema language.
+
+Changes made:
+
+- Added a new `contracts/` package.
+  - `contracts/base.py` defines `CONTRACT_LAYER_VERSION`, stable schema ids, and an optional future artifact envelope.
+  - `contracts/semantic.py` owns `SemanticUnderstanding`.
+  - `contracts/metrics.py` owns metric planning specs and `PandasMetricPlan`.
+  - `contracts/dashboard.py` owns dashboard KPI/chart/question specs and `DashboardPlan`.
+  - `contracts/validation.py` owns `ValidationIssue` and `DashboardValidationReport`.
+  - `contracts/critique.py` owns `DashboardCritique`.
+  - `contracts/insights.py` owns analytical brain input/result contracts.
+- Updated agents, validator, app orchestration, and notebook export so production handoff types come from `contracts`.
+- Preserved old import paths by re-exporting contract models from the existing agent and validation modules.
+- Added `scripts/export_contract_schemas.py`.
+- Exported JSON Schemas to `docs/contracts/schemas/`.
+- Added `docs/contracts/agent-contracts.md` explaining producers, consumers, artifacts, and schema files.
+- Updated README and project introduction docs to mention the shared contract layer.
+- Added `tests/test_contract_layer.py`.
+
+Cohesion checks:
+
+- Production agent code no longer imports shared handoff models from sibling agent modules.
+- Agent modules still keep old public imports working for compatibility.
+- Contract modules import without loading LangChain/OpenAI clients.
+- Sample semantic, metric, dashboard, validation, critique, and insight payloads validate through the new contract package.
+
+Verification:
+
+- `python -m py_compile contracts\__init__.py contracts\base.py contracts\semantic.py contracts\metrics.py contracts\dashboard.py contracts\validation.py contracts\critique.py contracts\insights.py agents\semantic_understanding.py agents\metric_code_planner.py agents\dashboard_planner.py agents\dashboard_critic.py agents\analytical_brain.py dashboard_validation.py notebook_export.py app.py scripts\export_contract_schemas.py` passes.
+- `python -m unittest tests.test_contract_layer` passes: 4 tests.
+- `python -m unittest discover -s tests` passes: 38 tests.
+- `npm.cmd run typecheck` passes.
+- `npm.cmd run build` passes.
+
+Reason: The agents already had structured outputs, but the definitions were scattered across agent modules. Centralizing the contracts makes every handoff explicit and keeps semantic understanding, metric planning, dashboard planning, validation, critique, and insight generation speaking the same language.
+
+### Rendered frontend dashboards from analysis outputs
+
+Fixed the new frontend's dashboard view so it can render actual computed metric outputs instead of only showing dashboard plan specifications.
+
+Changes made:
+
+- Added `analysis_outputs` to FastAPI artifact status and run bundles.
+- Added `artifacts/analysis_outputs/*_analysis_outputs.json` as a compact serialized metric-output artifact.
+- Added serializer helpers for DataFrame, Series, dict, list, tuple, and scalar analysis outputs.
+- Updated dashboard generation to write serialized analysis outputs after metric execution.
+- Updated frontend API types to include serialized analysis outputs.
+- Replaced spec-only dashboard cards with rendered views when output data is available:
+  - KPI cards calculate visible values from scalar, mapping, or table outputs.
+  - Bar/histogram specs render compact bar views.
+  - Line/multi-line specs render compact SVG line previews.
+  - Scatter specs render compact point previews.
+  - Table/text/KPI specs render data tables.
+  - Missing output data still falls back to the spec card, which is useful for debugging stale or incomplete artifacts.
+- Updated artifact counts to use the actual artifact key count instead of a hard-coded total.
+- Added a rigorous mocked Playwright test proving that when the API provides `analysis_outputs`, the frontend renders `.renderedChart` and bar marks instead of `.chartSpec` fallback cards.
+- Updated README, project introduction docs, and contract docs to mention analysis-output artifacts and rendered frontend previews.
+
+Verification:
+
+- `python -m unittest tests.test_api_contracts` passes: 9 tests.
+- `python -m unittest discover -s tests` passes: 39 tests.
+- `npm.cmd run typecheck` passes.
+- `npm.cmd run build` passes.
+- `npm.cmd run test:e2e` passes: 7 browser tests.
+
+Reason: The Next.js dashboard previously looked like a finished dashboard but only displayed the dashboard plan's chart contracts. Persisting compact analysis outputs and rendering them in the frontend closes the loop from agent planning to computed data to visible dashboard output.
+
+### Cleaned generated runtime state for a fresh start
+
+Removed stale generated runtime files so future runs start against the current contract/API/frontend shape.
+
+Cleaned:
+
+- `artifacts/` runtime outputs, leaving a fresh `artifacts/logs/` directory.
+- `frontend/.next/`.
+- `frontend/test-results/`.
+- Python `__pycache__/` directories under the project, tests, agents, and contracts.
+
+Stopped local listeners on ports `3000`, `8000`, and `8501` first because the Next.js dev server had locked files under `.next`.
+
+Preserved:
+
+- Source code.
+- Documentation.
+- Tests.
+- `.env`.
+- `.venv`.
+- `frontend/node_modules/`.
+- `worklog.md`.
+
+Verification:
+
+- `artifacts/` now contains only `artifacts/logs/`.
+- Removed frontend build/test output directories are absent.
+- Removed Python cache directories are absent.
+
+Reason: Historical artifacts were produced by older pipeline shapes and no longer represented the current system. Clearing generated state avoids confusing the new frontend renderer and contract layer with stale saved runs.
+
+### Hardened Kaggle CSV Import Edge Cases
+
+Fixed Kaggle imports where the API lists a CSV such as `train.csv` but downloads it as `train.csv.zip`.
+
+Changes made:
+
+- Normalized Kaggle download handling so `fetch_kaggle_dataset()` returns real CSV bytes whether Kaggle provides a plain CSV, a listed `.csv.zip`, or a CSV nested inside a downloaded zip.
+- Extracted downloaded zip files into isolated `_extracted` folders instead of the download root.
+- Matched selected files using normalized Kaggle-style paths, basenames, and `.zip`-stripped names.
+- Skipped unsafe zip members with absolute paths, empty path parts, `.` parts, or `..` traversal.
+- Added `tests/test_kaggle_import.py` with mocked Kaggle API coverage for zipped CSVs, nested CSV members, multiple CSV members, unsafe zip paths, and listed `.csv.zip` selection.
+- Updated README troubleshooting to document zipped Kaggle CSV support.
+
+Verification:
+
+- `python -m py_compile app.py tests\test_kaggle_import.py` passes.
+- `python -m unittest tests.test_kaggle_import` passes: 5 tests.
+- `python -m unittest discover -s tests` passes: 44 tests.
+- `npm.cmd run typecheck` passes.
+- `npm.cmd run build` passes.
+- Live smoke test for `rohitsahoo/sales-forecasting` now selects `train.csv`, extracts `train.csv.zip`, and returns 2,129,689 bytes from `train.csv`.
+
+Reason: Kaggle's file API can list a CSV contract while `dataset_download_file()` materializes a zip on disk. Normalizing that boundary keeps the rest of the pipeline speaking the same language: a selected Kaggle dataset file becomes CSV bytes before metadata, analysis, dashboard planning, or frontend rendering touch it.
+
+### Modularized backend core out of app.py
+
+Refactored the current Streamlit app so shared backend behavior now lives in focused `core/` modules instead of being defined inside `app.py`.
+
+Changes made:
+
+- Added `core/` as the canonical backend package.
+  - `core/config.py` owns artifact directory constants and feature flags.
+  - `core/csv_io.py` owns CSV fallback parsing and named byte-file helpers.
+  - `core/kaggle_import.py` owns Kaggle refs, file selection, zip extraction, metadata text, and imports.
+  - `core/dataset_metadata.py` owns dataframe profiling, metadata contracts, dataframe context, and data-integrity summaries.
+  - `core/artifacts.py` owns artifact path builders and save helpers.
+  - `core/metric_execution.py` owns generated-code sanitization, validation, execution, and metric-plan repair.
+  - `core/pipeline.py` owns dashboard planning, validation, and critic repair orchestration.
+- Updated `api.py` so FastAPI generation and Kaggle imports use `core.*` directly instead of importing backend helpers from `app.py`.
+- Kept `app.py` as the Streamlit UI shell and compatibility surface.
+- Preserved old imports such as `from app import fetch_kaggle_dataset`, `sanitize_generated_code`, `failed_metric_plan_path_for`, and `notebook_view_enabled`.
+- Updated README and project introduction docs to describe `core/` as the backend home.
+
+Regression coverage added:
+
+- Module-boundary tests prove `core.*` imports without importing Streamlit and `api.py` does not import `app.py`.
+- CSV ingestion tests cover default parsing, delimiter fallback, malformed rows, invalid input, and named byte files.
+- Kaggle tests now cover URL normalization, invalid refs, basename matching, listed `.csv.zip`, downloaded zip extraction, nested CSVs, Windows-style zip member paths, multiple CSV preference, unsafe paths, and missing CSV failure.
+- Dataset metadata tests cover inferred roles, stats/nulls/samples/top values, representative values, metadata fields, dataframe context, and integrity summaries.
+- Artifact tests cover path builders, metadata index deduplication, dataset writes, model JSON saves, failed metric plans, and notebook writes.
+- Metric execution tests cover sanitizer behavior, unsafe-code rejection, safe execution, missing/non-dict outputs, repair loop behavior, final failure, and persisted failed attempts.
+- Pipeline tests cover planner/validator/critic flow for passing and repaired dashboards.
+- Compatibility tests prove old `app.py` imports still resolve.
+
+Verification:
+
+- `python -m py_compile app.py api.py core\__init__.py core\config.py core\csv_io.py core\kaggle_import.py core\dataset_metadata.py core\artifacts.py core\metric_execution.py core\pipeline.py` passes.
+- `python -m unittest discover -s tests` passes: 74 tests.
+- `npm.cmd run typecheck` passes.
+- `npm.cmd run build` passes.
+
+Reason: `app.py` had become the dependency hub for Streamlit UI, ingestion, artifacts, metadata, generated-code execution, and pipeline orchestration. Moving backend responsibilities into platform-neutral `core` modules gives FastAPI, tests, and future frontend work a clean backend surface while keeping the Streamlit app working.
+
+### Added contract validation at agent boundaries
+
+Wrapped agent handoff boundaries with Pydantic `.model_validate()` through a shared `validate_contract()` helper.
+
+Changes made:
+
+- Added `validate_contract()` to `contracts/base.py`.
+- Validated raw agent outputs before returning from:
+  - semantic understanding generation
+  - metric plan generation
+  - metric plan repair
+  - dashboard plan generation
+  - dashboard critique repair
+  - analytical brain input/result generation
+- Validated upstream contract inputs before agents serialize them into downstream prompts.
+- Validated metric plans in generated-code execution and repair loops.
+- Validated dashboard plans, validation reports, and critiques in the dashboard orchestration pipeline.
+- Validated deterministic dashboard validation inputs and final validation reports.
+- Added tests proving raw dict payloads from agent and validator boundaries are normalized into the canonical contract models.
+
+Why this is required:
+
+- LLM structured output usually returns a Pydantic object, but provider/tooling changes, tests, repairs, stale artifacts, and future adapters can hand back dict-like payloads.
+- `.model_validate()` makes every handoff explicit: downstream agents receive contract-confirmed objects, not hopeful shapes.
+- This keeps the contract layer meaningful as the shared language between semantic understanding, metric planning, dashboard planning, validation, critique, and insights.
+
+Verification:
+
+- `python -m py_compile contracts\base.py agents\semantic_understanding.py agents\metric_code_planner.py agents\dashboard_planner.py agents\dashboard_critic.py agents\analytical_brain.py core\metric_execution.py core\pipeline.py dashboard_validation.py` passes.
+- `python -m unittest tests.test_agents_contracts tests.test_contract_layer tests.test_metric_execution tests.test_core_pipeline tests.test_dashboard_contract_validation` passes: 27 tests.
+- `python -m unittest discover -s tests` passes: 80 tests.
+- `npm.cmd run typecheck` passes.
+- `npm.cmd run build` passes.
+
+Reason: The system now fails fast at agent and deterministic boundary edges when a handoff violates the shared contract language, instead of letting shape drift surface later as rendering, validation, or notebook errors.
+
+### Added agent timeout guardrails and compact dataframe context
+
+Diagnosed a run that appeared stuck at the metrics stage after importing the UFC Kaggle dataset.
+
+What happened:
+
+- The run successfully wrote metadata, dataset, and semantic artifacts.
+- No metric-plan or analysis-output artifacts were written.
+- Replaying the metric step in the foreground did not return within several minutes, which pointed to an unbounded metric-planner LLM call rather than a deterministic pandas execution error.
+- The UFC dataframe context was materially larger than the prior sales run because it had more columns, a long description, and richer categorical summaries.
+
+Changes made:
+
+- Added shared OpenAI client guardrails in `agents/semantic_understanding.py`:
+  - `DEFAULT_LLM_TIMEOUT_SECONDS = 90.0`
+  - `DEFAULT_LLM_MAX_RETRIES = 1`
+  - `OPENAI_TIMEOUT_SECONDS` and `OPENAI_MAX_RETRIES` environment overrides.
+- Applied those timeout/retry settings to semantic, metric planning, metric repair, dashboard planning, dashboard critique, and analytical insight agents.
+- Added compact agent context helpers in `core/dataset_metadata.py`.
+  - Long descriptions are truncated for prompts.
+  - Very large unique/sample lists are trimmed.
+  - Column names, roles, nulls, stats, top values, and representative values remain available.
+- Restarted the API cleanly from the project `.venv` so runtime dependencies match tests.
+
+Why this helps:
+
+- Timeout does not make the metric agent smarter; it prevents a slow provider/tool call from holding the job forever.
+- Compact context reduces token pressure and makes the metric planner less likely to stall.
+- A better future architecture is to split metric planning into smaller stages and allow partial metric outputs, but this pass keeps behavior compatible while adding a bounded failure mode.
+
+Verification:
+
+- `.venv\Scripts\python.exe -m py_compile agents\semantic_understanding.py agents\metric_code_planner.py agents\dashboard_planner.py agents\dashboard_critic.py agents\analytical_brain.py core\dataset_metadata.py tests\test_agents_contracts.py tests\test_dataset_metadata.py` passes.
+- `.venv\Scripts\python.exe -m unittest tests.test_dataset_metadata tests.test_agents_contracts` passes: 18 tests.
+- `.venv\Scripts\python.exe -m unittest discover -s tests` passes: 85 tests.
+- `git diff --check` reports only existing CRLF conversion warnings, no whitespace errors.
+
+### Audited long-running and misleading failure boundaries
+
+Performed a reliability audit focused on issues like the metrics-stage hang and runs showing failed/stuck while partial artifacts exist.
+
+Findings:
+
+- Metric agent calls now have LLM timeouts, but failed metric attempts from the FastAPI generation path were not being persisted because `metadata=None` was passed to metric execution.
+- Generated metric code could still contain `while` loops, which created an obvious infinite-execution risk even with safe imports blocked.
+- API generation swallowed optional insights/notebook failures without server logs.
+- Job failures returned a failed status to the frontend but did not log backend tracebacks, making diagnosis depend on reproducing the issue manually.
+- FastAPI dataset ingestion still used a local `pd.read_csv` and simplified metadata builder instead of the canonical `core.csv_io` and `core.dataset_metadata` path.
+- The frontend artifact contract was missing `analysis_outputs`.
+- Failed jobs did not invalidate the run bundle, so partial artifacts written before failure could be invisible until a manual refresh.
+- Switching runs could leave the previous job status visible in the action bar.
+
+Fixes made:
+
+- FastAPI now passes run metadata into `generate_executable_metric_plan()` so failed metric-plan attempts can be saved.
+- Generated metric code validation now rejects `while` loops.
+- API job failures, optional insights failures, and optional notebook failures are logged with tracebacks.
+- FastAPI dataset saves now use `read_csv_with_fallbacks()` and `build_dataset_metadata()` from `core`.
+- API upload coverage now proves semicolon-delimited CSVs parse through the same core fallback path and receive rich metadata.
+- Frontend `ArtifactStatus` now includes `analysis_outputs`.
+- Frontend API errors now unwrap FastAPI `detail` messages instead of showing raw JSON blobs.
+- Frontend job completion and failure both invalidate run data so artifact status catches up.
+- Frontend clears old job state when the selected run changes.
+
+Verification:
+
+- `.venv\Scripts\python.exe -m py_compile api.py core\metric_execution.py tests\test_api_contracts.py tests\test_metric_execution.py` passes.
+- `.venv\Scripts\python.exe -m unittest tests.test_api_contracts tests.test_metric_execution tests.test_csv_ingestion tests.test_dataset_metadata` passes: 28 tests.
+- `.venv\Scripts\python.exe -m unittest discover -s tests` passes: 87 tests.
+- `npm.cmd run typecheck` passes.
+- `npm.cmd run build` passes.
+- `git diff --check` reports only existing CRLF conversion warnings, no whitespace errors.
+
+Remaining architecture note:
+
+- The more robust long-term fix is to split metric planning into smaller stages: metric specs first, code generation per output or output group, independent execution, and partial successful artifacts. That would make one slow or bad metric less likely to block the whole dashboard, but it is a larger pipeline contract change.
+
+### Added structured run tracing
+
+Implemented durable run-scoped tracing so generation runs can be inspected from artifacts/API/frontend without manually reading logs.
+
+Changes made:
+
+- Added `core/run_tracing.py`.
+  - Defines `RunTrace` and `RunTraceEvent`.
+  - Writes incremental trace JSON to `artifacts/traces/{run_id}_trace.json`.
+  - Supports running, completed, warning, failed, and skipped events.
+  - Trace writes are best-effort and log failures without killing generation.
+- Added `core/run_orchestration.py`.
+  - Moved FastAPI dashboard-generation orchestration out of `api.py`.
+  - Wraps generation stages in trace events:
+    - dataset context
+    - semantic understanding
+    - metrics
+    - dashboard planning/validation
+    - critic repair
+    - insights
+    - notebook
+    - complete
+  - Required stage failures mark the trace failed and re-raise.
+  - Optional insights/notebook failures become warning events.
+  - Critic repair attempts are surfaced through a lightweight callback from `core.pipeline`.
+- Added trace artifact path support.
+  - `ArtifactStatus` now includes `trace`.
+  - Run bundles now include `trace` when present and `null` for older runs.
+  - Added `GET /api/runs/{run_id}/trace`.
+- Updated frontend API types and Artifacts tab.
+  - Added `RunTrace` and `RunTraceEvent` types.
+  - Artifacts inventory now includes trace status.
+  - Artifacts view renders a run trace timeline with status, duration, messages, errors, and produced artifact labels.
+  - Older runs show “No trace artifact for this run.”
+- Stabilized frontend e2e tests by routing screenshot tests to a complete mocked run instead of relying on whichever local artifact is currently latest.
+
+Verification:
+
+- `.venv\Scripts\python.exe -m py_compile api.py core\config.py core\artifacts.py core\pipeline.py core\run_tracing.py core\run_orchestration.py tests\test_run_tracing.py tests\test_api_contracts.py tests\test_core_artifacts.py tests\test_core_boundaries.py` passes.
+- `.venv\Scripts\python.exe -m py_compile api.py core\*.py` equivalent using PowerShell-expanded file list passes.
+- `.venv\Scripts\python.exe -m unittest tests.test_run_tracing tests.test_api_contracts tests.test_core_artifacts tests.test_core_boundaries tests.test_core_pipeline` passes: 28 tests.
+- `.venv\Scripts\python.exe -m unittest discover -s tests` passes: 92 tests.
+- `npm.cmd run typecheck` passes.
+- `npm.cmd run build` passes.
+- `npm.cmd run test:e2e` passes: 8 tests.
+- `git diff --check` reports only existing CRLF conversion warnings, no whitespace errors.
+
+Reason: Job polling is ephemeral and logs are not run-scoped enough for product debugging. The trace artifact gives each run a durable timeline that shows partial success, optional warnings, required failures, and produced artifacts in the same language as the rest of the pipeline.
+
+### Stitched dashboard critic repair boundary after failed run
+
+Investigated a failed Kaggle dashboard generation run for `rohitsahoo/sales-forecasting`.
+
+What happened:
+
+- Kaggle import succeeded.
+- Semantic understanding succeeded.
+- Metric planning and metric execution succeeded.
+- The run failed during dashboard critic repair.
+- The critic returned a repaired dashboard chart with `orientation: null`.
+- The new contract validation correctly rejected that payload because `orientation` must be `"vertical"` or `"horizontal"`.
+
+Fixes made:
+
+- Updated `DashboardChartSpec` to normalize `null` values for fields that already have safe defaults:
+  - `orientation: null` becomes `"vertical"`.
+  - `sort_order: null` becomes `"descending"`.
+  - `metrics: null` becomes `[]`.
+- Updated dashboard pipeline repair handling so critic repair is optional resilience, not a hard dependency.
+  - If critic repair still returns an invalid payload, the pipeline logs the failure.
+  - The original dashboard plan and validation report are kept and saved instead of aborting the run.
+- Added regression tests for null chart defaults and failed critic repair fallback.
+
+Why it broke now:
+
+- Before contract validation, malformed repaired chart fields could drift downstream silently.
+- After adding `.model_validate()`, the system correctly failed fast at the critic handoff.
+- The missing piece was resilience policy: strict validation is right, but optional repair should not prevent saving the already generated dashboard and validation report.
+
+Verification:
+
+- `python -m unittest tests.test_agents_contracts tests.test_core_pipeline tests.test_dashboard_contract_validation` passes: 19 tests.
+- `python -m unittest discover -s tests` passes: 82 tests.
+- `npm.cmd run typecheck` passes.
+- `npm.cmd run build` passes.
+- Restarted FastAPI on `http://127.0.0.1:8000`.
+- Regenerated `kaggle-rohitsahoo-sales-forecasting-train_dbb0f167b27c` with notebook disabled.
+- Job completed successfully and wrote dashboard, validation, critique, and insights artifacts.
+- Validation status is `passed_with_warnings`.
+
+Reason: Contract validation should catch schema drift, but a failed optional repair pass should not throw away a usable dashboard. This keeps the pipeline strict at boundaries while still resilient in recovery paths.
+
+### Added targeted cleanup for model routing and dashboard view quality
+
+Stabilized the current dashboard pipeline work before changing models.
+
+Changes made:
+
+- Added `core/model_config.py`.
+  - Keeps the old shared default model as `gpt-4.1-mini`.
+  - Adds role-specific model resolution:
+    - `OPENAI_SEMANTIC_MODEL`
+    - `OPENAI_METRIC_CODE_MODEL`
+    - `OPENAI_METRIC_REPAIR_MODEL`
+    - `OPENAI_DASHBOARD_MODEL`
+    - `OPENAI_DASHBOARD_CRITIC_MODEL`
+    - `OPENAI_INSIGHTS_MODEL`
+  - Falls back from explicit function argument, to role-specific env var, to `OPENAI_MODEL`, to default.
+  - Centralizes `OPENAI_TIMEOUT_SECONDS` and `OPENAI_MAX_RETRIES`.
+- Updated semantic, metric code, metric repair, dashboard planner, dashboard critic, and insights agents to use role-based model config.
+- Added a fresh-run metadata normalization guard so new metadata consistently exposes `pandas_dtype`, `dtype`, `inferred_role`, null counts, null percentages, and schema column details.
+- Tightened dashboard validation so bar charts fail validation when they ignore extra categorical dimensions with multiple values.
+- Improved the frontend bar renderer for colored grouped outputs so repeated category rows render as stacked segments instead of duplicate labels.
+- Added `scripts/compare_model_runs.py` to compare before/after model-change runs by artifact presence, metric repair count, validation issues, dashboard shape, trace warnings/failures, and stage durations.
+- Documented role-specific model env vars and the comparison script in `.env.example` and `README.md`.
+
+Why this cleanup was needed:
+
+- The previous model setting was a single global default hidden in the semantic agent.
+- Metric code generation is the stage most likely to benefit from a stronger model, but upgrading every agent at once would increase cost and make regressions harder to isolate.
+- Dashboard views were technically valid by schema but could still be visually incoherent when the renderer could not represent the requested grain.
+- Before/after run comparison gives us evidence for whether a stronger metric/code model improves the app.
+
+Verification:
+
+- `.venv\Scripts\python.exe -m py_compile core\model_config.py core\dataset_metadata.py api.py app.py notebook_export.py dashboard_validation.py agents\semantic_understanding.py agents\metric_code_planner.py agents\dashboard_planner.py agents\dashboard_critic.py agents\analytical_brain.py scripts\compare_model_runs.py` passes.
+- `.venv\Scripts\python.exe -m unittest tests.test_model_config tests.test_dataset_metadata tests.test_dashboard_contract_validation tests.test_agents_contracts` passes: 30 tests.
+- `.venv\Scripts\python.exe -m unittest discover -s tests` passes: 98 tests.
+- `npm.cmd run typecheck` passes from `frontend/`.
+- `npm.cmd run build` passes from `frontend/`.
+- `scripts\compare_model_runs.py` successfully produces a comparison report for existing run artifacts.
+
+### Added metric and dashboard model benchmarks
+
+Added separate benchmark harnesses so model changes can be tested at the pipeline stage where they matter.
+
+Changes made:
+
+- Added `scripts/benchmark_metric_models.py`.
+  - Benchmarks only the metric path:
+    - saved metadata
+    - saved semantic understanding
+    - dataframe context
+    - metric planner
+    - sandbox execution
+    - metric repair loop
+  - Varies only `OPENAI_METRIC_CODE_MODEL` and `OPENAI_METRIC_REPAIR_MODEL`.
+  - Saves reports to `artifacts/benchmarks/metric_models/`.
+- Added `scripts/benchmark_dashboard_models.py`.
+  - Benchmarks only dashboard planning and deterministic validation.
+  - Reuses fixed metadata, semantic understanding, metric plan, and analysis outputs.
+  - Varies only `OPENAI_DASHBOARD_MODEL` and `OPENAI_DASHBOARD_CRITIC_MODEL`.
+  - Saves reports to `artifacts/benchmarks/dashboard_models/`.
+- Added tests for both benchmark scripts.
+
+Real-world benchmark dataset:
+
+- Kaggle dataset: `uciml/iris`
+- File: `Iris.csv`
+- Size: 5,107 bytes
+- Baseline full run: `kaggle-iris-baseline_600ac44f23c2`
+
+Metric-only benchmark results:
+
+- `gpt-4.1-mini`
+  - status: succeeded
+  - duration: 62.834 seconds
+  - failed attempts: 1
+  - declared outputs: 6
+  - produced outputs: 7
+- `gpt-4.1`
+  - status: succeeded
+  - duration: 31.77 seconds
+  - failed attempts: 1
+  - declared outputs: 6
+  - produced outputs: 6
+- `gpt-5-mini`
+  - status: failed
+  - duration: 290.466 seconds
+  - failed attempts: 3
+  - final error: `NameError: name 'type' is not defined`
+
+Dashboard-only benchmark results:
+
+- `gpt-4.1-mini`
+  - status: succeeded
+  - duration: 18.0 seconds
+  - validation: passed
+  - errors: 0
+  - warnings: 0
+  - critic used: false
+  - KPIs: 2
+  - overview charts: 2
+  - question views: 3
+  - chart mix: 3 bar, 1 histogram, 1 table
+- `gpt-4.1`
+  - status: succeeded
+  - duration: 10.3 seconds
+  - validation: passed
+  - errors: 0
+  - warnings: 0
+  - critic used: false
+  - KPIs: 2
+  - overview charts: 2
+  - question views: 3
+  - chart mix: 2 bar, 1 histogram, 2 table
+
+Conclusion:
+
+- `gpt-4.1` is the best next model candidate for metric and dashboard stages.
+- `gpt-5.2` failed the full upgraded metric run with a timeout after sandbox/repair failures.
+- `gpt-5-mini` failed the metric-only benchmark and was much slower.
+- The next practical upgrade is to set:
+  - `OPENAI_METRIC_CODE_MODEL=gpt-4.1`
+  - `OPENAI_METRIC_REPAIR_MODEL=gpt-4.1`
+  - optionally `OPENAI_DASHBOARD_MODEL=gpt-4.1`
+  - optionally `OPENAI_DASHBOARD_CRITIC_MODEL=gpt-4.1`
+
+Reasoning:
+
+- The pipeline problem is not generic code-writing ability; it is constrained, sandbox-safe pandas generation.
+- Stronger reasoning models can overbuild in this context. The failed `gpt-5.2` run tried more ambitious feature-importance and nearest-centroid style logic, then hit sandbox and timeout failures.
+- `gpt-5-mini` also failed the isolated metric benchmark after multiple repair attempts, so it was not a safer middle ground for the metric step.
+- `gpt-4.1` gave the best practical signal: it succeeded in the same production metric path, completed faster than `gpt-4.1-mini`, and produced output counts that matched the declared contract exactly.
+- The dashboard benchmark showed the same pattern: `gpt-4.1` passed validation with no issues and was faster than `gpt-4.1-mini`.
+- We should upgrade only the stages with benchmark evidence instead of changing every agent. This keeps cost and regression surface smaller, and it preserves semantic/insight behavior until we have separate evidence for those roles.
+
+Tradeoff:
+
+- `gpt-4.1` may cost more than `gpt-4.1-mini`, but the benchmark suggests it can reduce time and produce cleaner contracts in the two most fragile stages.
+- This does not solve deeper architecture issues like monolithic metric generation. The durable long-term fix is still to split metric planning/code generation per output so one bad metric cannot block an entire dashboard.
+
+Verification:
+
+- `.venv\Scripts\python.exe -m py_compile scripts\benchmark_metric_models.py scripts\benchmark_dashboard_models.py tests\test_benchmark_metric_models.py tests\test_benchmark_dashboard_models.py` passes.
+- `.venv\Scripts\python.exe -m unittest tests.test_benchmark_metric_models tests.test_benchmark_dashboard_models tests.test_model_config tests.test_metric_execution` passes.
+
+### Applied benchmark-winning model routing
+
+Updated the running app configuration to use the benchmark-winning model for code-heavy and dashboard-planning stages.
+
+Changes made:
+
+- Updated local `.env` with:
+  - `OPENAI_METRIC_CODE_MODEL=gpt-4.1`
+  - `OPENAI_METRIC_REPAIR_MODEL=gpt-4.1`
+  - `OPENAI_DASHBOARD_MODEL=gpt-4.1`
+  - `OPENAI_DASHBOARD_CRITIC_MODEL=gpt-4.1`
+- Updated `.env.example` to show the same recommended role-specific defaults.
+- Restarted FastAPI on `http://127.0.0.1:8000`.
+
+Verification:
+
+- API health check returns `{"status": "ok"}`.
+- Model routing check resolves:
+  - metric code: `gpt-4.1`
+  - metric repair: `gpt-4.1`
+  - dashboard: `gpt-4.1`
+  - dashboard critic: `gpt-4.1`
+  - semantic: `gpt-4.1-mini`
+  - insights: `gpt-4.1-mini`
+- `.venv\Scripts\python.exe -m unittest tests.test_model_config tests.test_benchmark_metric_models tests.test_benchmark_dashboard_models` passes: 11 tests.
+
+Reasoning:
+
+- We applied the model change after benchmarking, not before, because the full `gpt-5.2` experiment showed that a nominally stronger coding model can be worse under this app's sandbox constraints.
+- The chosen routing keeps `gpt-4.1-mini` for semantic and insights because those stages were not the observed bottleneck and were not part of the strongest benchmark signal.
+- Metric code and metric repair are upgraded together because repair quality depends on the same code-generation constraints as the initial metric plan.
+- Dashboard planner and critic are upgraded together because critic repair must speak the same chart/view language as the planner and deterministic validator.
+- Updating `.env.example` makes the benchmark-backed recommendation reproducible, while updating local `.env` makes the currently running app ready for fresh testing.
+
+Remaining risk:
+
+- The benchmark used the small Iris dataset. The routing should be validated on at least one wider real-world dataset and one messier Kaggle CSV before treating it as final.
+- If `gpt-4.1` still produces occasional sandbox failures on larger datasets, the next fix should be prompt/architecture refinement, not jumping straight back to `gpt-5.2`.

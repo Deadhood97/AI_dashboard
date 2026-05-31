@@ -10,12 +10,15 @@ import pandas as pd
 from nbformat.v4 import new_code_cell, new_markdown_cell, new_notebook, new_output
 from pydantic import BaseModel
 
-from agents.analytical_brain import AnalyticalBrainResult
-from agents.dashboard_critic import DashboardCritique
-from agents.dashboard_planner import DashboardPlan
-from agents.metric_code_planner import PandasMetricPlan
-from agents.semantic_understanding import SemanticUnderstanding
-from dashboard_validation import DashboardValidationReport
+from contracts import (
+    AnalyticalBrainResult,
+    DashboardCritique,
+    DashboardPlan,
+    DashboardValidationReport,
+    PandasMetricPlan,
+    SemanticUnderstanding,
+)
+from core.dataset_metadata import normalize_dataset_metadata
 
 
 def _json_safe(value: Any) -> Any:
@@ -47,6 +50,7 @@ def _json_block(data: Any) -> str:
 
 
 def compact_metadata_summary(metadata: dict[str, Any]) -> dict[str, Any]:
+    metadata = normalize_dataset_metadata(metadata)
     columns = []
     for column in metadata.get("columns", []):
         summary = {
@@ -72,6 +76,7 @@ def compact_metadata_summary(metadata: dict[str, Any]) -> dict[str, Any]:
 
 
 def metadata_columns_frame(metadata: dict[str, Any]) -> pd.DataFrame:
+    metadata = normalize_dataset_metadata(metadata)
     rows = []
     for column in metadata.get("columns", []):
         stats = column.get("statistics", {}) or {}

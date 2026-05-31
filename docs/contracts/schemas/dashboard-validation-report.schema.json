@@ -1,0 +1,99 @@
+{
+  "$defs": {
+    "ValidationIssue": {
+      "properties": {
+        "component": {
+          "enum": [
+            "metric_output",
+            "kpi",
+            "chart"
+          ],
+          "title": "Component",
+          "type": "string"
+        },
+        "item_title": {
+          "title": "Item Title",
+          "type": "string"
+        },
+        "message": {
+          "title": "Message",
+          "type": "string"
+        },
+        "severity": {
+          "enum": [
+            "info",
+            "warning",
+            "error"
+          ],
+          "title": "Severity",
+          "type": "string"
+        },
+        "source_output_key": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Source Output Key"
+        },
+        "suggested_fix": {
+          "title": "Suggested Fix",
+          "type": "string"
+        }
+      },
+      "required": [
+        "severity",
+        "component",
+        "item_title",
+        "message",
+        "suggested_fix"
+      ],
+      "title": "ValidationIssue",
+      "type": "object"
+    }
+  },
+  "$id": "https://dashboard-studio.local/contracts/dashboard-validation-report.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "properties": {
+    "issues": {
+      "items": {
+        "$ref": "#/$defs/ValidationIssue"
+      },
+      "title": "Issues",
+      "type": "array"
+    },
+    "rejected_chart_titles": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Rejected Chart Titles",
+      "type": "array"
+    },
+    "rejected_kpi_titles": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Rejected Kpi Titles",
+      "type": "array"
+    },
+    "status": {
+      "enum": [
+        "passed",
+        "passed_with_warnings",
+        "failed"
+      ],
+      "title": "Status",
+      "type": "string"
+    }
+  },
+  "required": [
+    "status"
+  ],
+  "title": "DashboardValidationReport",
+  "type": "object",
+  "x-contract-layer-version": "0.1.0"
+}

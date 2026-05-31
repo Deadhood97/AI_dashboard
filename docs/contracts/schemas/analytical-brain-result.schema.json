@@ -1,0 +1,125 @@
+{
+  "$defs": {
+    "DashboardInsight": {
+      "properties": {
+        "business_implication": {
+          "description": "Why this insight matters for decisions or follow-up analysis.",
+          "title": "Business Implication",
+          "type": "string"
+        },
+        "confidence": {
+          "description": "Confidence based on data quality, validation status, and supporting evidence.",
+          "enum": [
+            "high",
+            "medium",
+            "low"
+          ],
+          "title": "Confidence",
+          "type": "string"
+        },
+        "evidence": {
+          "description": "Specific metrics, chart outputs, or comparisons supporting the insight.",
+          "items": {
+            "type": "string"
+          },
+          "title": "Evidence",
+          "type": "array"
+        },
+        "explanation": {
+          "description": "Plain-language explanation grounded in dashboard outputs.",
+          "title": "Explanation",
+          "type": "string"
+        },
+        "headline": {
+          "description": "Concise executive insight headline.",
+          "title": "Headline",
+          "type": "string"
+        },
+        "impact": {
+          "description": "Likely importance of this insight.",
+          "enum": [
+            "critical",
+            "high",
+            "medium",
+            "low"
+          ],
+          "title": "Impact",
+          "type": "string"
+        },
+        "recommended_action": {
+          "description": "Practical next step a user could take based on this insight.",
+          "title": "Recommended Action",
+          "type": "string"
+        },
+        "related_dashboard_items": {
+          "description": "Dashboard KPI/chart/question titles that support this insight.",
+          "items": {
+            "type": "string"
+          },
+          "title": "Related Dashboard Items",
+          "type": "array"
+        }
+      },
+      "required": [
+        "headline",
+        "explanation",
+        "evidence",
+        "business_implication",
+        "recommended_action",
+        "confidence",
+        "impact",
+        "related_dashboard_items"
+      ],
+      "title": "DashboardInsight",
+      "type": "object"
+    }
+  },
+  "$id": "https://dashboard-studio.local/contracts/analytical-brain-result.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "properties": {
+    "executive_summary": {
+      "description": "Short synthesis of what the generated dashboard is telling the user.",
+      "title": "Executive Summary",
+      "type": "string"
+    },
+    "follow_up_questions": {
+      "description": "High-value analytical questions to investigate next.",
+      "items": {
+        "type": "string"
+      },
+      "title": "Follow Up Questions",
+      "type": "array"
+    },
+    "key_insights": {
+      "description": "Prioritized, evidence-backed insights from the dashboard.",
+      "items": {
+        "$ref": "#/$defs/DashboardInsight"
+      },
+      "title": "Key Insights",
+      "type": "array"
+    },
+    "narrative_title": {
+      "description": "Brief title for the analytical narrative.",
+      "title": "Narrative Title",
+      "type": "string"
+    },
+    "watchouts": {
+      "description": "Limitations, caveats, or data quality risks that affect interpretation.",
+      "items": {
+        "type": "string"
+      },
+      "title": "Watchouts",
+      "type": "array"
+    }
+  },
+  "required": [
+    "executive_summary",
+    "key_insights",
+    "watchouts",
+    "follow_up_questions",
+    "narrative_title"
+  ],
+  "title": "AnalyticalBrainResult",
+  "type": "object",
+  "x-contract-layer-version": "0.1.0"
+}

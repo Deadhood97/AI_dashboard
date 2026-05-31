@@ -1,33 +1,19 @@
 from __future__ import annotations
 
-from typing import Any, Literal
+from typing import Any
 
 import numpy as np
 import pandas as pd
-from pydantic import BaseModel, Field
 
-from agents.dashboard_planner import DashboardChartSpec, DashboardPlan
-from agents.metric_code_planner import PandasMetricPlan
-
-
-IssueSeverity = Literal["info", "warning", "error"]
-IssueComponent = Literal["metric_output", "kpi", "chart"]
-
-
-class ValidationIssue(BaseModel):
-    severity: IssueSeverity
-    component: IssueComponent
-    item_title: str
-    source_output_key: str | None = None
-    message: str
-    suggested_fix: str
-
-
-class DashboardValidationReport(BaseModel):
-    status: Literal["passed", "passed_with_warnings", "failed"]
-    issues: list[ValidationIssue] = Field(default_factory=list)
-    rejected_chart_titles: list[str] = Field(default_factory=list)
-    rejected_kpi_titles: list[str] = Field(default_factory=list)
+from contracts.validation import (
+    DashboardValidationReport,
+    IssueComponent,
+    IssueSeverity,
+    ValidationIssue,
+)
+from contracts.base import validate_contract
+from contracts.dashboard import DashboardChartSpec, DashboardPlan
+from contracts.metrics import PandasMetricPlan
 
 
 def output_to_dataframe(output: Any) -> pd.DataFrame:
@@ -56,12 +42,36 @@ def _categorical_columns(table: pd.DataFrame) -> list[str]:
     return categorical
 
 
+def _ignored_categorical_dimensions(
+    table: pd.DataFrame,
+    protected_columns: set[str],
+) -> list[str]:
+    return [
+        column
+        for column in _categorical_columns(table)
+        if column not in protected_columns
+    ]
+
+
 def _count_columns(table: pd.DataFrame) -> list[str]:
     return [
         str(column)
         for column in table.columns
         if str(column).lower() in {"count", "n", "sample_size", "record_count", "review_count"}
         and column in _numeric_columns(table)
+    ]
+
+
+def _normalized_column_name(column: Any) -> str:
+    return "".join(character for character in str(column).lower() if character.isalnum())
+
+
+def _missing_columns_by_normalized_name(expected_columns: list[str], actual_columns: Any) -> list[str]:
+    actual_normalized = {_normalized_column_name(column) for column in actual_columns}
+    return [
+        column
+        for column in expected_columns
+        if _normalized_column_name(column) not in actual_normalized
     ]
 
 
@@ -155,6 +165,7 @@ def validate_metric_outputs(
     analysis_outputs: dict[str, Any],
     referenced_output_keys: set[str] | None = None,
 ) -> list[ValidationIssue]:
+    metric_plan = validate_contract(PandasMetricPlan, metric_plan)
     issues: list[ValidationIssue] = []
     referenced_output_keys = referenced_output_keys or set()
     for spec in metric_plan.analysis_outputs:
@@ -177,11 +188,14 @@ def validate_metric_outputs(
 
         if isinstance(analysis_outputs[spec.key], dict):
             output_keys = set(analysis_outputs[spec.key].keys())
-            missing_columns = [
-                column
-                for column in spec.columns
-                if column not in output_keys and column not in {"description", "variety"}
-            ]
+            missing_columns = _missing_columns_by_normalized_name(
+                [
+                    column
+                    for column in spec.columns
+                    if column not in {"description", "variety"}
+                ],
+                output_keys,
+            )
             if missing_columns:
                 issues.append(
                     _issue(
@@ -209,7 +223,7 @@ def validate_metric_outputs(
             )
             continue
 
-        missing_columns = [column for column in spec.columns if column not in table.columns]
+        missing_columns = _missing_columns_by_normalized_name(spec.columns, table.columns)
         if missing_columns:
             issues.append(
                 _issue(
@@ -228,6 +242,7 @@ def validate_chart_spec(
     spec: DashboardChartSpec,
     analysis_outputs: dict[str, Any],
 ) -> list[ValidationIssue]:
+    spec = validate_contract(DashboardChartSpec, spec)
     issues: list[ValidationIssue] = []
     if spec.source_output_key not in analysis_outputs:
         return [
@@ -394,6 +409,18 @@ def validate_chart_spec(
                 )
             )
         elif x in table.columns and y in table.columns:
+            ignored_dimensions = _ignored_categorical_dimensions(table, protected_columns)
+            if ignored_dimensions:
+                issues.append(
+                    _issue(
+                        "error",
+                        "chart",
+                        spec.title,
+                        f"Bar chart ignores additional dimensions with multiple values: {ignored_dimensions}.",
+                        "Aggregate or filter those dimensions before plotting, include one as color, or render a compact table.",
+                        spec.source_output_key,
+                    )
+                )
             if spec.color and spec.color in table.columns:
                 color_values = int(table[spec.color].nunique(dropna=True))
                 color_values_after_limit = (
@@ -591,6 +618,8 @@ def validate_dashboard_plan(
     metric_plan: PandasMetricPlan,
     analysis_outputs: dict[str, Any],
 ) -> DashboardValidationReport:
+    dashboard_plan = validate_contract(DashboardPlan, dashboard_plan)
+    metric_plan = validate_contract(PandasMetricPlan, metric_plan)
     referenced_output_keys = {kpi.source_output_key for kpi in dashboard_plan.kpis}
     referenced_output_keys.update(chart.source_output_key for chart in dashboard_plan.overview_charts)
     referenced_output_keys.update(
@@ -650,11 +679,14 @@ def validate_dashboard_plan(
     else:
         status = "passed"
 
-    return DashboardValidationReport(
-        status=status,
-        issues=issues,
-        rejected_chart_titles=list(dict.fromkeys(rejected_chart_titles)),
-        rejected_kpi_titles=list(dict.fromkeys(rejected_kpi_titles)),
+    return validate_contract(
+        DashboardValidationReport,
+        {
+            "status": status,
+            "issues": issues,
+            "rejected_chart_titles": list(dict.fromkeys(rejected_chart_titles)),
+            "rejected_kpi_titles": list(dict.fromkeys(rejected_kpi_titles)),
+        },
     )
 
 

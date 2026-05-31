@@ -2,8 +2,8 @@ import unittest
 
 import pandas as pd
 
-from agents.dashboard_planner import DashboardChartSpec
-from agents.metric_code_planner import (
+from contracts.dashboard import DashboardChartSpec, DashboardPlan
+from contracts.metrics import (
     AnalysisOutputSpec,
     DashboardMetricSpec,
     PandasMetricPlan,
@@ -17,7 +17,7 @@ class DashboardContractValidationTests(unittest.TestCase):
             "trend": pd.DataFrame(
                 {
                     "month": ["Jan", "Feb", "Mar"],
-                    "fatigue": [60, 62, 63],
+                    "fatigue": [40, 62, 85],
                     "performance": [75, 76, 78],
                 }
             )
@@ -30,6 +30,28 @@ class DashboardContractValidationTests(unittest.TestCase):
             metrics=["fatigue", "performance"],
             rationale="Compare two metrics over time.",
         )
+
+        issues = validate_chart_spec(spec, outputs)
+
+        self.assertFalse([issue for issue in issues if issue.severity == "error"])
+
+    def test_chart_spec_raw_payload_is_validated_before_validation(self):
+        outputs = {
+            "trend": pd.DataFrame(
+                {
+                    "month": ["Jan", "Feb", "Mar"],
+                    "fatigue": [40, 62, 85],
+                }
+            )
+        }
+        spec = {
+            "title": "Fatigue Trend",
+            "chart_type": "line",
+            "source_output_key": "trend",
+            "x": "month",
+            "y": "fatigue",
+            "rationale": "Show fatigue over time.",
+        }
 
         issues = validate_chart_spec(spec, outputs)
 
@@ -145,11 +167,122 @@ class DashboardContractValidationTests(unittest.TestCase):
         report = validate_dashboard_plan(dashboard_plan, metric_plan, outputs)
 
         self.assertEqual(report.status, "passed_with_warnings")
-        self.assertTrue(
-            any(
-                issue.component == "metric_output" and issue.severity == "warning"
-                for issue in report.issues
+
+    def test_bar_chart_rejects_unrepresented_extra_categorical_dimension(self):
+        metric_plan = PandasMetricPlan(
+            dashboard_metrics=[],
+            question_analyses=[],
+            analysis_outputs=[
+                AnalysisOutputSpec(
+                    key="outcome_by_weight_location",
+                    output_type="dataframe",
+                    semantic_role="categorical_comparison",
+                    columns=["weight_class", "event_location", "method", "proportion"],
+                    recommended_views=["bar_chart"],
+                    description="Outcome proportions by weight class, event location, and method.",
+                    render_hint="Use a table or aggregate one categorical dimension before charting.",
+                )
+            ],
+            agent_summary="Test mixed-grain chart validation.",
+            required_columns=["weight_class", "event_location", "method"],
+            assumptions=[],
+            limitations=[],
+            pandas_code="analysis_outputs = {}",
+        )
+        plan = DashboardPlan(
+            dashboard_title="Fight dashboard",
+            dashboard_summary="Summary",
+            data_integrity_notes=[],
+            kpis=[],
+            overview_charts=[
+                DashboardChartSpec(
+                    title="Outcome Distribution",
+                    chart_type="bar",
+                    source_output_key="outcome_by_weight_location",
+                    x="weight_class",
+                    y="proportion",
+                    color="method",
+                    top_n=12,
+                    rationale="Compare outcomes.",
+                )
+            ],
+            question_views=[],
+            assumptions=[],
+            limitations=[],
+        )
+        outputs = {
+            "outcome_by_weight_location": pd.DataFrame(
+                {
+                    "weight_class": ["Bantamweight", "Bantamweight", "Lightweight", "Lightweight"],
+                    "event_location": ["Abu Dhabi", "London", "Abu Dhabi", "London"],
+                    "method": ["Decision", "Decision", "KO/TKO", "KO/TKO"],
+                    "proportion": [0.5, 0.6, 0.4, 0.3],
+                }
             )
+        }
+
+        report = validate_dashboard_plan(plan, metric_plan, outputs)
+
+        self.assertEqual(report.status, "failed")
+        self.assertIn("Outcome Distribution", report.rejected_chart_titles)
+        self.assertIn("event_location", report.issues[0].message)
+
+    def test_metric_output_column_validation_tolerates_spacing_and_underscores(self):
+        from tests.test_agents_contracts import sample_dashboard_plan
+
+        metric_plan = PandasMetricPlan(
+            agent_summary="Test normalized output columns.",
+            required_columns=["region", "sales"],
+            dashboard_metrics=[
+                DashboardMetricSpec(
+                    name="Sales by region",
+                    business_purpose="Compare regions.",
+                    calculation="Sum sales by region.",
+                    output_key="sales_by_region",
+                    required_columns=["region", "sales"],
+                    missing_data_strategy="Drop missing rows.",
+                )
+            ],
+            question_analyses=[],
+            analysis_outputs=[
+                AnalysisOutputSpec(
+                    key="sales_by_region",
+                    output_type="dataframe",
+                    semantic_role="ranked_table",
+                    columns=["Region", "Order Count", "Average Sales"],
+                    recommended_views=["table"],
+                    description="Region sales.",
+                    render_hint="Table.",
+                )
+            ],
+            pandas_code="analysis_outputs = {}",
+            assumptions=[],
+            limitations=[],
+        )
+        dashboard_plan = sample_dashboard_plan()
+        dashboard_plan.kpis[0].source_output_key = "sales_by_region"
+        dashboard_plan.overview_charts[0].source_output_key = "sales_by_region"
+        dashboard_plan.question_views[0].chart.source_output_key = "sales_by_region"
+        dashboard_plan.overview_charts[0].chart_type = "table"
+        dashboard_plan.question_views[0].chart.chart_type = "table"
+        outputs = {
+            "sales_by_region": pd.DataFrame(
+                {
+                    "Region": ["West"],
+                    "Order_Count": [10],
+                    "Average_Sales": [123.45],
+                }
+            )
+        }
+
+        report = validate_dashboard_plan(dashboard_plan, metric_plan, outputs)
+
+        self.assertFalse(
+            [
+                issue
+                for issue in report.issues
+                if issue.component == "metric_output" and issue.severity == "error"
+            ]
         )
 
 

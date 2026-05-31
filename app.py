@@ -1,17 +1,10 @@
 from __future__ import annotations
 
-import ast
 import hashlib
 import json
 import logging
 import os
-import shutil
 import re
-import tempfile
-import textwrap
-import uuid
-from datetime import datetime, timezone
-from io import BytesIO
 from pathlib import Path
 from typing import Any
 
@@ -20,62 +13,110 @@ import plotly.express as px
 import numpy as np
 import streamlit as st
 from dotenv import load_dotenv
-from agents.analytical_brain import (
+from contracts import (
     AnalyticalBrainResult,
+    DashboardChartSpec,
+    DashboardCritique,
+    DashboardKpiSpec,
+    DashboardPlan,
+    DashboardValidationReport,
+    PandasMetricPlan,
+    SemanticUnderstanding,
+)
+from agents.analytical_brain import (
     build_analytical_brain_input,
     generate_analytical_insights,
 )
 from agents.dashboard_planner import (
-    DashboardChartSpec,
-    DashboardKpiSpec,
-    DashboardPlan,
     generate_dashboard_plan,
 )
-from agents.dashboard_critic import DashboardCritique, repair_dashboard_plan
 from agents.metric_code_planner import (
-    PandasMetricPlan,
     generate_metric_code_plan,
-    repair_metric_code_plan,
 )
 from agents.semantic_understanding import (
-    SemanticUnderstanding,
     generate_semantic_understanding,
 )
 from dashboard_validation import (
-    DashboardValidationReport,
     chart_is_rejected,
     kpi_is_rejected,
     validate_dashboard_plan,
 )
-from notebook_export import build_dashboard_notebook, write_dashboard_notebook
-from pandas.api.types import (
-    is_bool_dtype,
-    is_datetime64_any_dtype,
-    is_numeric_dtype,
+from core.artifacts import (
+    dashboard_critique_path_for,
+    dashboard_path_for,
+    dashboard_validation_path_for,
+    dataset_path_for,
+    failed_metric_plan_path_for,
+    insights_path_for,
+    metadata_path_for,
+    metric_plan_path_for,
+    notebook_path_for,
+    save_analytical_insights,
+    save_dashboard_critique,
+    save_dashboard_notebook_artifact,
+    save_dashboard_plan,
+    save_dashboard_validation_report,
+    save_failed_metric_plan,
+    save_metadata,
+    save_metric_plan,
+    save_semantic_understanding,
+    save_uploaded_dataset,
+    semantic_path_for,
+    slugify_filename,
+    update_metadata_index,
 )
+from core.config import (
+    APP_LOG_PATH,
+    CRITIQUE_DIR,
+    DASHBOARD_DIR,
+    DATASET_DIR,
+    INSIGHTS_DIR,
+    KAGGLE_DOWNLOAD_DIR,
+    LATEST_METADATA_PATH,
+    LOG_DIR,
+    METADATA_DIR,
+    METADATA_INDEX_PATH,
+    METRIC_PLAN_DIR,
+    NOTEBOOK_DIR,
+    SEMANTIC_DIR,
+    notebook_view_enabled,
+)
+from core.csv_io import make_named_bytes_file, read_csv_with_fallbacks
+from core.dataset_metadata import (
+    analyze_columns,
+    build_dataframe_context,
+    build_dataset_metadata,
+    data_integrity_summary,
+    infer_column_role,
+    json_safe,
+    normalize_dataset_metadata,
+)
+from core.kaggle_import import (
+    choose_kaggle_csv_file,
+    extract_zip_files,
+    fetch_kaggle_dataset,
+    find_downloaded_kaggle_csv,
+    kaggle_api,
+    kaggle_description_from_metadata,
+    kaggle_download_folder,
+    kaggle_selected_file_candidates,
+    list_kaggle_files,
+    normalize_kaggle_dataset_ref,
+    normalize_kaggle_member_path,
+    safe_kaggle_zip_destination,
+)
+from core.metric_execution import (
+    execute_metric_plan,
+    generate_executable_metric_plan,
+    sanitize_generated_code,
+    validate_generated_code,
+)
+from core.pipeline import generate_validated_dashboard_plan
 
 
-METADATA_DIR = Path("artifacts") / "metadata"
-LATEST_METADATA_PATH = METADATA_DIR / "latest_metadata.json"
-METADATA_INDEX_PATH = METADATA_DIR / "metadata_index.json"
-DATASET_DIR = Path("artifacts") / "datasets"
-SEMANTIC_DIR = Path("artifacts") / "semantic"
-METRIC_PLAN_DIR = Path("artifacts") / "metric_plans"
-DASHBOARD_DIR = Path("artifacts") / "dashboard"
-CRITIQUE_DIR = Path("artifacts") / "critiques"
-INSIGHTS_DIR = Path("artifacts") / "insights"
-NOTEBOOK_DIR = Path("artifacts") / "notebooks"
-LOG_DIR = Path("artifacts") / "logs"
-APP_LOG_PATH = LOG_DIR / "app.log"
-KAGGLE_DOWNLOAD_DIR = Path("artifacts") / "kaggle_downloads"
 MAX_OVERVIEW_CHARTS = 2
 MAX_QUESTION_VIEWS = 3
 MAX_TABLE_ROWS = 25
-
-
-def notebook_view_enabled() -> bool:
-    value = os.getenv("ENABLE_NOTEBOOK_VIEW", "").strip().lower()
-    return value in {"1", "true", "yes", "on"}
 
 
 def inject_global_styles() -> None:
@@ -432,217 +473,6 @@ def configure_logging() -> logging.Logger:
 logger = configure_logging()
 
 
-def read_csv_with_fallbacks(uploaded_file: Any) -> tuple[pd.DataFrame, str]:
-    """Read an uploaded CSV with a strict first pass and safer fallbacks."""
-    attempts = [
-        {
-            "label": "default pandas C parser",
-            "options": {},
-        },
-        {
-            "label": "python parser with inferred delimiter",
-            "options": {"engine": "python", "sep": None},
-        },
-        {
-            "label": "python parser skipping malformed rows",
-            "options": {
-                "engine": "python",
-                "sep": None,
-                "on_bad_lines": "skip",
-            },
-        },
-    ]
-
-    last_error: Exception | None = None
-
-    for attempt in attempts:
-        uploaded_file.seek(0)
-        try:
-            df = pd.read_csv(uploaded_file, **attempt["options"])
-            return df, attempt["label"]
-        except Exception as exc:
-            last_error = exc
-            logger.exception(
-                "CSV read attempt failed: filename=%s parser=%s",
-                uploaded_file.name,
-                attempt["label"],
-            )
-
-    raise ValueError(
-        "Could not parse the CSV after trying the default parser and safer "
-        "fallback parsers. The file may have malformed rows, inconsistent "
-        "columns, broken quoting, an unusual delimiter, or unsupported encoding."
-    ) from last_error
-
-
-def make_named_bytes_file(raw_bytes: bytes, filename: str) -> BytesIO:
-    buffer = BytesIO(raw_bytes)
-    buffer.name = filename
-    return buffer
-
-
-def normalize_kaggle_dataset_ref(value: str) -> str:
-    dataset_ref = value.strip()
-    if dataset_ref.startswith("https://www.kaggle.com/datasets/"):
-        dataset_ref = dataset_ref.removeprefix("https://www.kaggle.com/datasets/")
-    elif dataset_ref.startswith("http://www.kaggle.com/datasets/"):
-        dataset_ref = dataset_ref.removeprefix("http://www.kaggle.com/datasets/")
-    dataset_ref = dataset_ref.strip("/")
-    parts = dataset_ref.split("/")
-    if len(parts) < 2 or not parts[0] or not parts[1]:
-        raise ValueError("Use a Kaggle dataset reference like `owner/dataset-slug`.")
-    return "/".join(parts[:3])
-
-
-def kaggle_download_folder(dataset_ref: str) -> Path:
-    return KAGGLE_DOWNLOAD_DIR / slugify_filename(dataset_ref.replace("/", "_"))
-
-
-def kaggle_api() -> Any:
-    load_dotenv()
-    try:
-        from kaggle.api.kaggle_api_extended import KaggleApi
-    except ImportError as exc:
-        raise RuntimeError(
-            "The `kaggle` package is not installed. Run `pip install -r requirements.txt`."
-        ) from exc
-
-    api = KaggleApi()
-    try:
-        api.authenticate()
-    except SystemExit as exc:
-        raise RuntimeError(
-            "Kaggle authentication is not configured. Run `kaggle auth login`, "
-            "set `KAGGLE_API_TOKEN`, or set legacy `KAGGLE_USERNAME` and `KAGGLE_KEY`."
-        ) from exc
-    return api
-
-
-def list_kaggle_files(api: Any, dataset_ref: str) -> list[dict[str, Any]]:
-    files: list[dict[str, Any]] = []
-    page_token: str | None = None
-
-    while True:
-        response = api.dataset_list_files(
-            dataset_ref,
-            page_token=page_token,
-            page_size=100,
-        )
-        if getattr(response, "error_message", None):
-            raise RuntimeError(response.error_message)
-
-        for dataset_file in getattr(response, "files", []) or []:
-            files.append(
-                {
-                    "name": getattr(dataset_file, "name", ""),
-                    "size": getattr(dataset_file, "total_bytes", None),
-                    "creation_date": getattr(dataset_file, "creation_date", None),
-                }
-            )
-
-        page_token = getattr(response, "next_page_token", None)
-        if not page_token:
-            return files
-
-
-def choose_kaggle_csv_file(files: list[dict[str, Any]], requested_file: str) -> str:
-    csv_files = [
-        str(file_info["name"])
-        for file_info in files
-        if str(file_info.get("name", "")).lower().endswith(".csv")
-    ]
-    if requested_file:
-        matching_file = next(
-            (
-                filename
-                for filename in csv_files
-                if filename == requested_file or Path(filename).name == requested_file
-            ),
-            None,
-        )
-        if not matching_file:
-            raise ValueError(f"`{requested_file}` was not found as a CSV in this Kaggle dataset.")
-        return matching_file
-
-    if not csv_files:
-        raise ValueError("This Kaggle dataset does not expose any CSV files.")
-    return csv_files[0]
-
-
-def kaggle_description_from_metadata(metadata: dict[str, Any], dataset_ref: str) -> str:
-    title = str(metadata.get("title") or "").strip()
-    subtitle = str(metadata.get("subtitle") or "").strip()
-    description = str(metadata.get("description") or "").strip()
-    licenses = metadata.get("licenses") or []
-    license_names = [
-        str(license_info.get("name", "")).strip()
-        for license_info in licenses
-        if isinstance(license_info, dict) and license_info.get("name")
-    ]
-
-    parts = [f"Kaggle dataset: {dataset_ref}"]
-    if title:
-        parts.append(f"Title: {title}")
-    if subtitle:
-        parts.append(f"Subtitle: {subtitle}")
-    if description:
-        parts.append(description)
-    if license_names:
-        parts.append(f"License: {', '.join(license_names)}")
-    return "\n\n".join(parts)
-
-
-def fetch_kaggle_dataset(dataset_ref_input: str, requested_file: str = "") -> dict[str, Any]:
-    dataset_ref = normalize_kaggle_dataset_ref(dataset_ref_input)
-    api = kaggle_api()
-    files = list_kaggle_files(api, dataset_ref)
-    selected_file = choose_kaggle_csv_file(files, requested_file.strip())
-
-    download_dir = kaggle_download_folder(dataset_ref)
-    if download_dir.exists():
-        shutil.rmtree(download_dir)
-    download_dir.mkdir(parents=True, exist_ok=True)
-
-    with tempfile.TemporaryDirectory() as metadata_temp_dir:
-        metadata_path = Path(api.dataset_metadata(dataset_ref, metadata_temp_dir))
-        kaggle_metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
-
-    api.dataset_download_file(
-        dataset_ref,
-        selected_file,
-        path=str(download_dir),
-        force=True,
-        quiet=True,
-    )
-
-    downloaded_files = [path for path in download_dir.rglob("*") if path.is_file()]
-    selected_path = next(
-        (
-            path
-            for path in downloaded_files
-            if path.name == Path(selected_file).name or str(path.relative_to(download_dir)) == selected_file
-        ),
-        None,
-    )
-    if selected_path is None:
-        csv_files = [path for path in downloaded_files if path.suffix.lower() == ".csv"]
-        selected_path = csv_files[0] if csv_files else None
-    if selected_path is None:
-        raise FileNotFoundError(f"Kaggle download completed, but `{selected_file}` was not found.")
-
-    raw_bytes = selected_path.read_bytes()
-    source_filename = f"kaggle_{dataset_ref.replace('/', '_')}_{Path(selected_file).name}"
-    return {
-        "dataset_ref": dataset_ref,
-        "selected_file": selected_file,
-        "filename": source_filename,
-        "raw_bytes": raw_bytes,
-        "description": kaggle_description_from_metadata(kaggle_metadata, dataset_ref),
-        "files": files,
-        "download_path": selected_path,
-    }
-
-
 def clear_dataset_session_state() -> None:
     for key in [
         "dataset_df",
@@ -684,7 +514,7 @@ def hydrate_prepared_dataset_from_artifacts() -> bool:
         return False
 
     try:
-        metadata = json.loads(LATEST_METADATA_PATH.read_text(encoding="utf-8"))
+        metadata = normalize_dataset_metadata(json.loads(LATEST_METADATA_PATH.read_text(encoding="utf-8")))
         dataset_path = dataset_path_for(metadata)
         if not dataset_path.exists():
             return False
@@ -859,551 +689,6 @@ def clear_dashboard_history_state() -> None:
         "dashboard_restored_from_history",
     ]:
         st.session_state.pop(key, None)
-
-
-def infer_column_role(series: pd.Series) -> str:
-    """Return a simple analytical role for a dataframe column."""
-    if is_datetime64_any_dtype(series):
-        return "temporal"
-    if is_bool_dtype(series):
-        return "boolean"
-    if is_numeric_dtype(series):
-        return "numeric"
-
-    unique_ratio = series.nunique(dropna=True) / max(len(series), 1)
-    if unique_ratio <= 0.2:
-        return "categorical"
-    return "text"
-
-
-def json_safe(value: Any) -> Any:
-    if pd.isna(value):
-        return None
-    if hasattr(value, "isoformat"):
-        return value.isoformat()
-    if hasattr(value, "item"):
-        return value.item()
-    return value
-
-
-def analyze_columns(df: pd.DataFrame) -> list[dict[str, Any]]:
-    metadata: list[dict[str, Any]] = []
-
-    for column in df.columns:
-        series = df[column]
-        non_null = series.dropna()
-        unique_values = non_null.drop_duplicates()
-        column_info: dict[str, Any] = {
-            "name": str(column),
-            "pandas_dtype": str(series.dtype),
-            "inferred_role": infer_column_role(series),
-            "row_count": int(len(series)),
-            "null_count": int(series.isna().sum()),
-            "null_percentage": round(float(series.isna().mean() * 100), 2),
-            "unique_count": int(series.nunique(dropna=True)),
-            "sample_values": [json_safe(value) for value in non_null.head(5).tolist()],
-        }
-
-        if is_numeric_dtype(series) and not is_bool_dtype(series):
-            column_info["statistics"] = {
-                "min": json_safe(series.min()),
-                "max": json_safe(series.max()),
-                "mean": json_safe(series.mean()),
-                "median": json_safe(series.median()),
-            }
-        elif is_datetime64_any_dtype(series):
-            column_info["statistics"] = {
-                "min": json_safe(series.min()),
-                "max": json_safe(series.max()),
-            }
-        else:
-            value_counts = non_null.astype(str).value_counts().head(12)
-            column_info["top_values"] = [
-                {"value": json_safe(index), "count": int(count)}
-                for index, count in value_counts.items()
-            ]
-
-            if len(unique_values) <= 500:
-                sorted_values = sorted(str(value) for value in unique_values.tolist())
-                column_info["unique_values"] = sorted_values
-            else:
-                sorted_values = sorted(str(value) for value in unique_values.tolist())
-                step = max(len(sorted_values) // 40, 1)
-                column_info["representative_values"] = sorted_values[::step][:40]
-
-        metadata.append(column_info)
-
-    return metadata
-
-
-def build_dataset_metadata(
-    df: pd.DataFrame,
-    filename: str,
-    raw_bytes: bytes,
-    dataset_description: str,
-) -> dict[str, Any]:
-    columns = analyze_columns(df)
-
-    return {
-        "source_file": filename,
-        "file_sha256": hashlib.sha256(raw_bytes).hexdigest(),
-        "created_at": datetime.now(timezone.utc).isoformat(),
-        "dataset_description": dataset_description,
-        "row_count": int(len(df)),
-        "column_count": int(len(df.columns)),
-        "columns": columns,
-        "schema": {
-            "description": dataset_description,
-            "columns": columns,
-        },
-    }
-
-
-def dataset_path_for(metadata: dict[str, Any]) -> Path:
-    file_hash = str(metadata["file_sha256"])[:12]
-    dataset_slug = slugify_filename(str(metadata["source_file"]))
-    return DATASET_DIR / f"{dataset_slug}_{file_hash}.csv"
-
-
-def save_uploaded_dataset(metadata: dict[str, Any], raw_bytes: bytes) -> Path:
-    DATASET_DIR.mkdir(parents=True, exist_ok=True)
-    dataset_path = dataset_path_for(metadata)
-    dataset_path.write_bytes(raw_bytes)
-    return dataset_path
-
-
-def build_dataframe_context(metadata: dict[str, Any], df: pd.DataFrame, rows: int = 8) -> str:
-    context = {
-        "source_file": metadata["source_file"],
-        "row_count": metadata["row_count"],
-        "column_count": metadata["column_count"],
-        "dataset_description": metadata.get("dataset_description", ""),
-        "columns": metadata["columns"],
-    }
-    return (
-        "Dataset context JSON:\n"
-        f"{json.dumps(context, indent=2)}\n\n"
-        f"First {rows} dataframe rows:\n{df.head(rows).to_markdown(index=False)}"
-    )
-
-
-def slugify_filename(filename: str) -> str:
-    stem = Path(filename).stem.lower()
-    slug = re.sub(r"[^a-z0-9]+", "-", stem).strip("-")
-    return slug or "dataset"
-
-
-def metadata_path_for(metadata: dict[str, Any]) -> Path:
-    file_hash = str(metadata["file_sha256"])[:12]
-    dataset_slug = slugify_filename(str(metadata["source_file"]))
-    return METADATA_DIR / f"{dataset_slug}_{file_hash}.json"
-
-
-def update_metadata_index(metadata_path: Path, metadata: dict[str, Any]) -> None:
-    if METADATA_INDEX_PATH.exists():
-        index = json.loads(METADATA_INDEX_PATH.read_text(encoding="utf-8"))
-    else:
-        index = []
-
-    entry = {
-        "source_file": metadata["source_file"],
-        "metadata_file": str(metadata_path),
-        "file_sha256": metadata["file_sha256"],
-        "created_at": metadata["created_at"],
-        "row_count": metadata["row_count"],
-        "column_count": metadata["column_count"],
-    }
-
-    index = [
-        existing
-        for existing in index
-        if not (
-            existing.get("source_file") == entry["source_file"]
-            and existing.get("file_sha256") == entry["file_sha256"]
-        )
-    ]
-    index.append(entry)
-    METADATA_INDEX_PATH.write_text(json.dumps(index, indent=2), encoding="utf-8")
-
-
-def save_metadata(metadata: dict[str, Any]) -> Path:
-    METADATA_DIR.mkdir(parents=True, exist_ok=True)
-    metadata_path = metadata_path_for(metadata)
-    metadata_json = json.dumps(metadata, indent=2)
-
-    metadata_path.write_text(metadata_json, encoding="utf-8")
-    LATEST_METADATA_PATH.write_text(metadata_json, encoding="utf-8")
-    update_metadata_index(metadata_path, metadata)
-
-    return metadata_path
-
-
-def semantic_path_for(metadata: dict[str, Any]) -> Path:
-    file_hash = str(metadata["file_sha256"])[:12]
-    dataset_slug = slugify_filename(str(metadata["source_file"]))
-    return SEMANTIC_DIR / f"{dataset_slug}_{file_hash}_semantic.json"
-
-
-def save_semantic_understanding(
-    metadata: dict[str, Any],
-    semantic_understanding: SemanticUnderstanding,
-) -> Path:
-    SEMANTIC_DIR.mkdir(parents=True, exist_ok=True)
-    semantic_path = semantic_path_for(metadata)
-    semantic_path.write_text(
-        semantic_understanding.model_dump_json(indent=2),
-        encoding="utf-8",
-    )
-    return semantic_path
-
-
-def metric_plan_path_for(metadata: dict[str, Any]) -> Path:
-    file_hash = str(metadata["file_sha256"])[:12]
-    dataset_slug = slugify_filename(str(metadata["source_file"]))
-    return METRIC_PLAN_DIR / f"{dataset_slug}_{file_hash}_metric_plan.json"
-
-
-def save_metric_plan(metadata: dict[str, Any], metric_plan: PandasMetricPlan) -> Path:
-    METRIC_PLAN_DIR.mkdir(parents=True, exist_ok=True)
-    metric_plan_path = metric_plan_path_for(metadata)
-    metric_plan_path.write_text(
-        metric_plan.model_dump_json(indent=2),
-        encoding="utf-8",
-    )
-    return metric_plan_path
-
-
-def failed_metric_plan_path_for(metadata: dict[str, Any]) -> Path:
-    file_hash = str(metadata["file_sha256"])[:12]
-    dataset_slug = slugify_filename(str(metadata["source_file"]))
-    timestamp = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S%f")
-    suffix = uuid.uuid4().hex[:8]
-    return METRIC_PLAN_DIR / f"{dataset_slug}_{file_hash}_failed_metric_plan_{timestamp}_{suffix}.json"
-
-
-def save_failed_metric_plan(
-    metadata: dict[str, Any],
-    metric_plan: PandasMetricPlan,
-    error_message: str,
-    sanitized_code: str,
-) -> Path:
-    METRIC_PLAN_DIR.mkdir(parents=True, exist_ok=True)
-    failed_path = failed_metric_plan_path_for(metadata)
-    payload = {
-        "error_message": error_message,
-        "sanitized_code": sanitized_code,
-        "metric_plan": metric_plan.model_dump(),
-    }
-    failed_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
-    return failed_path
-
-
-def dashboard_path_for(metadata: dict[str, Any]) -> Path:
-    file_hash = str(metadata["file_sha256"])[:12]
-    dataset_slug = slugify_filename(str(metadata["source_file"]))
-    return DASHBOARD_DIR / f"{dataset_slug}_{file_hash}_dashboard.json"
-
-
-def save_dashboard_plan(metadata: dict[str, Any], dashboard_plan: DashboardPlan) -> Path:
-    DASHBOARD_DIR.mkdir(parents=True, exist_ok=True)
-    dashboard_path = dashboard_path_for(metadata)
-    dashboard_path.write_text(
-        dashboard_plan.model_dump_json(indent=2),
-        encoding="utf-8",
-    )
-    return dashboard_path
-
-
-def dashboard_validation_path_for(metadata: dict[str, Any]) -> Path:
-    file_hash = str(metadata["file_sha256"])[:12]
-    dataset_slug = slugify_filename(str(metadata["source_file"]))
-    return DASHBOARD_DIR / f"{dataset_slug}_{file_hash}_dashboard_validation.json"
-
-
-def save_dashboard_validation_report(
-    metadata: dict[str, Any],
-    report: DashboardValidationReport,
-) -> Path:
-    DASHBOARD_DIR.mkdir(parents=True, exist_ok=True)
-    report_path = dashboard_validation_path_for(metadata)
-    report_path.write_text(report.model_dump_json(indent=2), encoding="utf-8")
-    return report_path
-
-
-def dashboard_critique_path_for(metadata: dict[str, Any]) -> Path:
-    file_hash = str(metadata["file_sha256"])[:12]
-    dataset_slug = slugify_filename(str(metadata["source_file"]))
-    return CRITIQUE_DIR / f"{dataset_slug}_{file_hash}_dashboard_critique.json"
-
-
-def save_dashboard_critique(
-    metadata: dict[str, Any],
-    critique: DashboardCritique,
-) -> Path:
-    CRITIQUE_DIR.mkdir(parents=True, exist_ok=True)
-    critique_path = dashboard_critique_path_for(metadata)
-    critique_path.write_text(critique.model_dump_json(indent=2), encoding="utf-8")
-    return critique_path
-
-
-def insights_path_for(metadata: dict[str, Any]) -> Path:
-    file_hash = str(metadata["file_sha256"])[:12]
-    dataset_slug = slugify_filename(str(metadata["source_file"]))
-    return INSIGHTS_DIR / f"{dataset_slug}_{file_hash}_analytical_insights.json"
-
-
-def notebook_path_for(metadata: dict[str, Any]) -> Path:
-    file_hash = str(metadata["file_sha256"])[:12]
-    dataset_slug = slugify_filename(str(metadata["source_file"]))
-    return NOTEBOOK_DIR / f"{dataset_slug}_{file_hash}_analysis_notebook.ipynb"
-
-
-def save_analytical_insights(
-    metadata: dict[str, Any],
-    insights: AnalyticalBrainResult,
-) -> Path:
-    INSIGHTS_DIR.mkdir(parents=True, exist_ok=True)
-    insights_path = insights_path_for(metadata)
-    insights_path.write_text(insights.model_dump_json(indent=2), encoding="utf-8")
-    return insights_path
-
-
-def save_dashboard_notebook_artifact(
-    metadata: dict[str, Any],
-    semantic_understanding: SemanticUnderstanding,
-    metric_plan: PandasMetricPlan,
-    analysis_outputs: dict[str, Any],
-    dashboard_plan: DashboardPlan,
-    validation_report: DashboardValidationReport,
-    critique: DashboardCritique | None,
-    analytical_insights: AnalyticalBrainResult | None,
-    df_preview: pd.DataFrame,
-    artifact_paths: dict[str, Any],
-) -> Path:
-    notebook = build_dashboard_notebook(
-        metadata=metadata,
-        semantic_understanding=semantic_understanding,
-        metric_plan=metric_plan,
-        analysis_outputs=analysis_outputs,
-        dashboard_plan=dashboard_plan,
-        validation_report=validation_report,
-        critique=critique,
-        analytical_insights=analytical_insights,
-        df_preview=df_preview,
-        artifact_paths=artifact_paths,
-    )
-    return write_dashboard_notebook(notebook_path_for(metadata), notebook)
-
-
-def data_integrity_summary(df: pd.DataFrame) -> dict[str, Any]:
-    total_cells = int(df.shape[0] * df.shape[1])
-    missing_cells = int(df.isna().sum().sum())
-    duplicate_rows = int(df.duplicated().sum())
-    missing_percentage = round((missing_cells / total_cells) * 100, 2) if total_cells else 0
-    return {
-        "row_count": int(len(df)),
-        "column_count": int(len(df.columns)),
-        "missing_cells": missing_cells,
-        "missing_percentage": missing_percentage,
-        "duplicate_rows": duplicate_rows,
-    }
-
-
-def sanitize_generated_code(code: str) -> str:
-    allowed_imports = {"import pandas as pd", "import numpy as np"}
-    cleaned_code = textwrap.dedent(code).strip()
-    if cleaned_code.startswith("```"):
-        cleaned_lines = cleaned_code.splitlines()
-        if cleaned_lines and cleaned_lines[0].strip().startswith("```"):
-            cleaned_lines = cleaned_lines[1:]
-        if cleaned_lines and cleaned_lines[-1].strip() == "```":
-            cleaned_lines = cleaned_lines[:-1]
-        cleaned_code = "\n".join(cleaned_lines)
-    cleaned_code = textwrap.dedent(cleaned_code).strip()
-
-    lines = []
-    for line in cleaned_code.splitlines():
-        if line.strip() in allowed_imports:
-            continue
-        lines.append(line)
-    cleaned_code = "\n".join(lines)
-
-    try:
-        ast.parse(cleaned_code)
-    except IndentationError:
-        normalized_lines: list[str] = []
-        previous_significant = ""
-        for line in cleaned_code.splitlines():
-            if line.startswith((" ", "\t")) and not previous_significant.endswith(":"):
-                normalized_lines.append(line.lstrip())
-            else:
-                normalized_lines.append(line)
-            if line.strip():
-                previous_significant = line.rstrip()
-        cleaned_code = "\n".join(normalized_lines)
-    except SyntaxError:
-        return cleaned_code
-
-    return cleaned_code
-
-
-def validate_generated_code(code: str) -> None:
-    tree = ast.parse(code)
-    blocked_names = {"open", "exec", "eval", "compile", "__import__", "input"}
-    blocked_roots = {
-        "os",
-        "sys",
-        "subprocess",
-        "socket",
-        "requests",
-        "pathlib",
-        "shutil",
-        "scipy",
-        "sklearn",
-        "statsmodels",
-    }
-
-    for node in ast.walk(tree):
-        if isinstance(node, (ast.Import, ast.ImportFrom)):
-            raise ValueError("Generated code may not import modules.")
-        if isinstance(node, ast.Name) and node.id in {"__builtins__", "__loader__", "__spec__"}:
-            raise ValueError("Generated code may not access interpreter internals.")
-        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
-            if node.func.id in blocked_names:
-                raise ValueError(f"Generated code may not call {node.func.id}.")
-        if isinstance(node, ast.Attribute):
-            if node.attr.startswith("__"):
-                raise ValueError("Generated code may not access dunder attributes.")
-            root = node
-            while isinstance(root, ast.Attribute):
-                root = root.value
-            if isinstance(root, ast.Name) and root.id in blocked_roots:
-                raise ValueError(f"Generated code may not access {root.id}.")
-
-
-def execute_metric_plan(df: pd.DataFrame, metric_plan: PandasMetricPlan) -> dict[str, Any]:
-    code = sanitize_generated_code(metric_plan.pandas_code)
-    validate_generated_code(code)
-    safe_builtins = {
-        "ValueError": ValueError,
-        "TypeError": TypeError,
-        "Exception": Exception,
-        "len": len,
-        "range": range,
-        "sorted": sorted,
-        "list": list,
-        "dict": dict,
-        "set": set,
-        "tuple": tuple,
-        "int": int,
-        "float": float,
-        "str": str,
-        "bool": bool,
-        "sum": sum,
-        "min": min,
-        "max": max,
-        "abs": abs,
-        "round": round,
-        "enumerate": enumerate,
-        "isinstance": isinstance,
-        "zip": zip,
-        "all": all,
-        "any": any,
-    }
-    globals_dict = {"__builtins__": safe_builtins, "pd": pd, "np": np}
-    locals_dict: dict[str, Any] = {"df": df.copy()}
-    exec(compile(code, "<metric_plan>", "exec"), globals_dict, locals_dict)
-    analysis_outputs = locals_dict.get("analysis_outputs")
-    if not isinstance(analysis_outputs, dict):
-        raise ValueError("Metric plan code must create analysis_outputs as a dictionary.")
-    return analysis_outputs
-
-
-def generate_executable_metric_plan(
-    df: pd.DataFrame,
-    semantic_understanding: SemanticUnderstanding,
-    df_head: str,
-    metadata: dict[str, Any] | None = None,
-    max_repairs: int = 2,
-) -> tuple[PandasMetricPlan, dict[str, Any]]:
-    metric_plan = generate_metric_code_plan(
-        semantic_understanding=semantic_understanding,
-        df_head=df_head,
-    )
-    for attempt in range(max_repairs + 1):
-        try:
-            return metric_plan, execute_metric_plan(df, metric_plan)
-        except Exception as exc:
-            sanitized_code = sanitize_generated_code(metric_plan.pandas_code)
-            error_message = f"{type(exc).__name__}: {exc}"
-            if metadata is not None:
-                failed_path = save_failed_metric_plan(
-                    metadata,
-                    metric_plan,
-                    error_message,
-                    sanitized_code,
-                )
-                logger.info("Saved failed metric plan attempt: %s", failed_path)
-            if attempt >= max_repairs:
-                raise
-            logger.info("Repairing metric plan after execution failure: %s", exc)
-            metric_plan = repair_metric_code_plan(
-                failed_plan=metric_plan,
-                semantic_understanding=semantic_understanding,
-                df_head=df_head,
-                error_message=error_message,
-                failing_code=sanitized_code,
-            )
-
-    raise RuntimeError("Metric plan repair loop exited unexpectedly.")
-
-
-def generate_validated_dashboard_plan(
-    metadata: dict[str, Any],
-    semantic_understanding: SemanticUnderstanding,
-    metric_plan: PandasMetricPlan,
-    analysis_outputs: dict[str, Any],
-    df_context: str,
-    max_repairs: int = 1,
-) -> tuple[DashboardPlan, DashboardValidationReport, DashboardCritique | None]:
-    dashboard_plan = generate_dashboard_plan(
-        metadata=metadata,
-        semantic_understanding=semantic_understanding,
-        metric_plan=metric_plan,
-        df_head=df_context,
-    )
-    validation_report = validate_dashboard_plan(
-        dashboard_plan=dashboard_plan,
-        metric_plan=metric_plan,
-        analysis_outputs=analysis_outputs,
-    )
-    critique: DashboardCritique | None = None
-
-    for attempt in range(max_repairs):
-        if validation_report.status != "failed":
-            break
-        logger.info(
-            "Repairing dashboard plan after validation failure: rejected_charts=%s rejected_kpis=%s",
-            validation_report.rejected_chart_titles,
-            validation_report.rejected_kpi_titles,
-        )
-        critique = repair_dashboard_plan(
-            metadata=metadata,
-            semantic_understanding=semantic_understanding,
-            metric_plan=metric_plan,
-            analysis_outputs=analysis_outputs,
-            dashboard_plan=dashboard_plan,
-            validation_report=validation_report,
-            df_context=df_context,
-        )
-        dashboard_plan = critique.repaired_dashboard_plan
-        validation_report = validate_dashboard_plan(
-            dashboard_plan=dashboard_plan,
-            metric_plan=metric_plan,
-            analysis_outputs=analysis_outputs,
-        )
-
-    return dashboard_plan, validation_report, critique
 
 
 def output_to_dataframe(output: Any) -> pd.DataFrame:

@@ -1,0 +1,848 @@
+{
+  "$defs": {
+    "AnalysisOutputSpec": {
+      "properties": {
+        "columns": {
+          "description": "Expected columns or value fields present in this output.",
+          "items": {
+            "type": "string"
+          },
+          "title": "Columns",
+          "type": "array"
+        },
+        "description": {
+          "description": "What the output contains.",
+          "title": "Description",
+          "type": "string"
+        },
+        "key": {
+          "description": "Key used in the analysis_outputs dictionary.",
+          "title": "Key",
+          "type": "string"
+        },
+        "output_type": {
+          "description": "Expected output type, such as scalar, dataframe, series, or dictionary.",
+          "title": "Output Type",
+          "type": "string"
+        },
+        "recommended_views": {
+          "description": "Supported visual views that would fit this output.",
+          "items": {
+            "enum": [
+              "kpi_card",
+              "bar_chart",
+              "line_chart",
+              "multi_line_chart",
+              "scatter_plot",
+              "histogram",
+              "table",
+              "text_insight"
+            ],
+            "type": "string"
+          },
+          "title": "Recommended Views",
+          "type": "array"
+        },
+        "render_hint": {
+          "description": "How the app or a future agent could render or use this output.",
+          "title": "Render Hint",
+          "type": "string"
+        },
+        "semantic_role": {
+          "description": "Analytical shape of this output for downstream dashboard planning.",
+          "enum": [
+            "scalar",
+            "ranked_table",
+            "time_series",
+            "time_series_by_entity",
+            "categorical_comparison",
+            "correlation_pair",
+            "distribution",
+            "raw_table",
+            "data_quality"
+          ],
+          "title": "Semantic Role",
+          "type": "string"
+        }
+      },
+      "required": [
+        "key",
+        "output_type",
+        "semantic_role",
+        "columns",
+        "recommended_views",
+        "description",
+        "render_hint"
+      ],
+      "title": "AnalysisOutputSpec",
+      "type": "object"
+    },
+    "DashboardChartSpec": {
+      "properties": {
+        "aggregation": {
+          "anyOf": [
+            {
+              "enum": [
+                "sum",
+                "mean",
+                "median",
+                "count",
+                "nunique",
+                "min",
+                "max"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Aggregation to apply when a chart needs grouped values.",
+          "title": "Aggregation"
+        },
+        "chart_type": {
+          "description": "Allowed Plotly chart type.",
+          "enum": [
+            "bar",
+            "line",
+            "multi_line",
+            "histogram",
+            "scatter",
+            "table",
+            "kpi",
+            "text"
+          ],
+          "title": "Chart Type",
+          "type": "string"
+        },
+        "color": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Optional series/color column for grouped or multi-line views.",
+          "title": "Color"
+        },
+        "dimension": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Deprecated compatibility field for grouping, x-axis, or categories.",
+          "title": "Dimension"
+        },
+        "metric": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Deprecated compatibility field for metric, y-axis, or distribution.",
+          "title": "Metric"
+        },
+        "metrics": {
+          "description": "Optional list of metric columns for wide-form multi-metric charts.",
+          "items": {
+            "type": "string"
+          },
+          "title": "Metrics",
+          "type": "array"
+        },
+        "orientation": {
+          "default": "vertical",
+          "description": "Chart orientation.",
+          "enum": [
+            "vertical",
+            "horizontal"
+          ],
+          "title": "Orientation",
+          "type": "string"
+        },
+        "question": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Analytical question this chart helps answer.",
+          "title": "Question"
+        },
+        "rationale": {
+          "description": "Why this chart type and fields were selected.",
+          "title": "Rationale",
+          "type": "string"
+        },
+        "scale_note": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "User-facing note explaining any non-zero or narrowed axis scale.",
+          "title": "Scale Note"
+        },
+        "sort_by": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Column to sort by before rendering.",
+          "title": "Sort By"
+        },
+        "sort_order": {
+          "default": "descending",
+          "description": "Sort direction.",
+          "enum": [
+            "ascending",
+            "descending"
+          ],
+          "title": "Sort Order",
+          "type": "string"
+        },
+        "source_output_key": {
+          "description": "Metric plan analysis_outputs key used as the chart data source.",
+          "title": "Source Output Key",
+          "type": "string"
+        },
+        "title": {
+          "description": "Short chart title.",
+          "title": "Title",
+          "type": "string"
+        },
+        "top_n": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": 10,
+          "description": "Optional row/category limit for readability.",
+          "title": "Top N"
+        },
+        "value_axis_max": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Optional explicit maximum for the chart's numeric value axis.",
+          "title": "Value Axis Max"
+        },
+        "value_axis_min": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Optional explicit minimum for the chart's numeric value axis.",
+          "title": "Value Axis Min"
+        },
+        "x": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "X-axis column.",
+          "title": "X"
+        },
+        "y": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Y-axis column.",
+          "title": "Y"
+        }
+      },
+      "required": [
+        "title",
+        "chart_type",
+        "source_output_key",
+        "rationale"
+      ],
+      "title": "DashboardChartSpec",
+      "type": "object"
+    },
+    "DashboardKpiSpec": {
+      "properties": {
+        "aggregation": {
+          "anyOf": [
+            {
+              "enum": [
+                "sum",
+                "mean",
+                "median",
+                "count",
+                "nunique",
+                "min",
+                "max"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Optional aggregation to use when the output is tabular.",
+          "title": "Aggregation"
+        },
+        "rationale": {
+          "description": "Why this KPI belongs on the dashboard.",
+          "title": "Rationale",
+          "type": "string"
+        },
+        "source_output_key": {
+          "description": "Metric plan analysis_outputs key used to render the KPI.",
+          "title": "Source Output Key",
+          "type": "string"
+        },
+        "title": {
+          "description": "Short user-facing KPI title.",
+          "title": "Title",
+          "type": "string"
+        },
+        "value_column": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Column or dictionary field to use when the output is not scalar.",
+          "title": "Value Column"
+        }
+      },
+      "required": [
+        "title",
+        "source_output_key",
+        "rationale"
+      ],
+      "title": "DashboardKpiSpec",
+      "type": "object"
+    },
+    "DashboardMetricSpec": {
+      "properties": {
+        "business_purpose": {
+          "description": "Why this metric matters to a user.",
+          "title": "Business Purpose",
+          "type": "string"
+        },
+        "calculation": {
+          "description": "Plain-language calculation description.",
+          "title": "Calculation",
+          "type": "string"
+        },
+        "missing_data_strategy": {
+          "description": "How missing values should be handled for this metric, such as drop invalid rows, fill numeric values with 0, median imputation, mode imputation, or report missingness separately.",
+          "title": "Missing Data Strategy",
+          "type": "string"
+        },
+        "name": {
+          "description": "Short dashboard metric name.",
+          "title": "Name",
+          "type": "string"
+        },
+        "output_key": {
+          "description": "Key in analysis_outputs where this metric result will be stored.",
+          "title": "Output Key",
+          "type": "string"
+        },
+        "required_columns": {
+          "description": "Columns needed to calculate this metric.",
+          "items": {
+            "type": "string"
+          },
+          "title": "Required Columns",
+          "type": "array"
+        }
+      },
+      "required": [
+        "name",
+        "business_purpose",
+        "calculation",
+        "output_key",
+        "required_columns",
+        "missing_data_strategy"
+      ],
+      "title": "DashboardMetricSpec",
+      "type": "object"
+    },
+    "DashboardPlan": {
+      "$id": "https://dashboard-studio.local/contracts/dashboard-plan.schema.json",
+      "properties": {
+        "assumptions": {
+          "description": "Assumptions behind the dashboard plan.",
+          "items": {
+            "type": "string"
+          },
+          "title": "Assumptions",
+          "type": "array"
+        },
+        "dashboard_summary": {
+          "description": "Brief explanation of what the dashboard focuses on.",
+          "title": "Dashboard Summary",
+          "type": "string"
+        },
+        "dashboard_title": {
+          "description": "User-facing dashboard title.",
+          "title": "Dashboard Title",
+          "type": "string"
+        },
+        "data_integrity_notes": {
+          "description": "Dataset quality checks or concerns the dashboard should show.",
+          "items": {
+            "type": "string"
+          },
+          "title": "Data Integrity Notes",
+          "type": "array"
+        },
+        "kpis": {
+          "description": "Major KPI cards to render near the top of the dashboard.",
+          "items": {
+            "$ref": "#/$defs/DashboardKpiSpec"
+          },
+          "title": "Kpis",
+          "type": "array"
+        },
+        "limitations": {
+          "description": "Limitations of the planned dashboard.",
+          "items": {
+            "type": "string"
+          },
+          "title": "Limitations",
+          "type": "array"
+        },
+        "overview_charts": {
+          "description": "General-purpose charts useful for understanding the dataset.",
+          "items": {
+            "$ref": "#/$defs/DashboardChartSpec"
+          },
+          "title": "Overview Charts",
+          "type": "array"
+        },
+        "question_views": {
+          "description": "Views that answer semantic-agent analytical questions.",
+          "items": {
+            "$ref": "#/$defs/DashboardQuestionView"
+          },
+          "title": "Question Views",
+          "type": "array"
+        }
+      },
+      "required": [
+        "dashboard_title",
+        "dashboard_summary",
+        "data_integrity_notes",
+        "kpis",
+        "overview_charts",
+        "question_views",
+        "assumptions",
+        "limitations"
+      ],
+      "title": "DashboardPlan",
+      "type": "object",
+      "x-contract-layer-version": "0.1.0"
+    },
+    "DashboardQuestionView": {
+      "properties": {
+        "answer_strategy": {
+          "description": "How the dashboard view will answer the question.",
+          "title": "Answer Strategy",
+          "type": "string"
+        },
+        "chart": {
+          "$ref": "#/$defs/DashboardChartSpec",
+          "description": "Chart spec for this question."
+        },
+        "question": {
+          "description": "Analytical question being answered.",
+          "title": "Question",
+          "type": "string"
+        }
+      },
+      "required": [
+        "question",
+        "answer_strategy",
+        "chart"
+      ],
+      "title": "DashboardQuestionView",
+      "type": "object"
+    },
+    "DashboardValidationReport": {
+      "$id": "https://dashboard-studio.local/contracts/dashboard-validation-report.schema.json",
+      "properties": {
+        "issues": {
+          "items": {
+            "$ref": "#/$defs/ValidationIssue"
+          },
+          "title": "Issues",
+          "type": "array"
+        },
+        "rejected_chart_titles": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Rejected Chart Titles",
+          "type": "array"
+        },
+        "rejected_kpi_titles": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Rejected Kpi Titles",
+          "type": "array"
+        },
+        "status": {
+          "enum": [
+            "passed",
+            "passed_with_warnings",
+            "failed"
+          ],
+          "title": "Status",
+          "type": "string"
+        }
+      },
+      "required": [
+        "status"
+      ],
+      "title": "DashboardValidationReport",
+      "type": "object",
+      "x-contract-layer-version": "0.1.0"
+    },
+    "PandasMetricPlan": {
+      "$id": "https://dashboard-studio.local/contracts/pandas-metric-plan.schema.json",
+      "properties": {
+        "agent_summary": {
+          "description": "Short explanation of what this metric plan is trying to calculate.",
+          "title": "Agent Summary",
+          "type": "string"
+        },
+        "analysis_outputs": {
+          "description": "Structured description of every expected analysis_outputs entry.",
+          "items": {
+            "$ref": "#/$defs/AnalysisOutputSpec"
+          },
+          "title": "Analysis Outputs",
+          "type": "array"
+        },
+        "assumptions": {
+          "description": "Assumptions made because only df.head() and semantic understanding were provided.",
+          "items": {
+            "type": "string"
+          },
+          "title": "Assumptions",
+          "type": "array"
+        },
+        "dashboard_metrics": {
+          "description": "General dashboard KPI metrics the code should calculate.",
+          "items": {
+            "$ref": "#/$defs/DashboardMetricSpec"
+          },
+          "title": "Dashboard Metrics",
+          "type": "array"
+        },
+        "limitations": {
+          "description": "Known limitations or checks needed before executing the code.",
+          "items": {
+            "type": "string"
+          },
+          "title": "Limitations",
+          "type": "array"
+        },
+        "pandas_code": {
+          "description": "Executable pandas code. It must assume a dataframe named df already exists and store all outputs in a dictionary named analysis_outputs.",
+          "title": "Pandas Code",
+          "type": "string"
+        },
+        "question_analyses": {
+          "description": "Analysis tasks mapped to the semantic agent's suggested questions.",
+          "items": {
+            "$ref": "#/$defs/QuestionAnalysisSpec"
+          },
+          "title": "Question Analyses",
+          "type": "array"
+        },
+        "required_columns": {
+          "description": "All dataframe columns required by the generated pandas code.",
+          "items": {
+            "type": "string"
+          },
+          "title": "Required Columns",
+          "type": "array"
+        }
+      },
+      "required": [
+        "agent_summary",
+        "required_columns",
+        "dashboard_metrics",
+        "question_analyses",
+        "analysis_outputs",
+        "pandas_code",
+        "assumptions",
+        "limitations"
+      ],
+      "title": "PandasMetricPlan",
+      "type": "object",
+      "x-contract-layer-version": "0.1.0"
+    },
+    "QuestionAnalysisSpec": {
+      "properties": {
+        "analysis_strategy": {
+          "description": "Plain-language description of how pandas should answer the question.",
+          "title": "Analysis Strategy",
+          "type": "string"
+        },
+        "missing_data_strategy": {
+          "description": "How missing values should be handled for this question analysis.",
+          "title": "Missing Data Strategy",
+          "type": "string"
+        },
+        "output_key": {
+          "description": "Key in analysis_outputs where this question's result will be stored.",
+          "title": "Output Key",
+          "type": "string"
+        },
+        "question": {
+          "description": "Question from the semantic understanding.",
+          "title": "Question",
+          "type": "string"
+        },
+        "required_columns": {
+          "description": "Columns needed to answer the question.",
+          "items": {
+            "type": "string"
+          },
+          "title": "Required Columns",
+          "type": "array"
+        }
+      },
+      "required": [
+        "question",
+        "analysis_strategy",
+        "output_key",
+        "required_columns",
+        "missing_data_strategy"
+      ],
+      "title": "QuestionAnalysisSpec",
+      "type": "object"
+    },
+    "SemanticUnderstanding": {
+      "$id": "https://dashboard-studio.local/contracts/semantic-understanding.schema.json",
+      "properties": {
+        "analytical_goals": {
+          "description": "High-value analytical goals that fit the dataset.",
+          "items": {
+            "type": "string"
+          },
+          "title": "Analytical Goals",
+          "type": "array"
+        },
+        "dataset_domain": {
+          "description": "The likely business or analytical domain of the dataset.",
+          "title": "Dataset Domain",
+          "type": "string"
+        },
+        "important_dimensions": {
+          "description": "Categorical, temporal, or segmentation fields useful for slicing data.",
+          "items": {
+            "type": "string"
+          },
+          "title": "Important Dimensions",
+          "type": "array"
+        },
+        "important_metrics": {
+          "description": "Numeric measures or KPIs that are analytically important.",
+          "items": {
+            "type": "string"
+          },
+          "title": "Important Metrics",
+          "type": "array"
+        },
+        "primary_entities": {
+          "description": "Main real-world entities represented in the dataset.",
+          "items": {
+            "type": "string"
+          },
+          "title": "Primary Entities",
+          "type": "array"
+        },
+        "suggested_questions": {
+          "description": "Specific questions that can likely be answered from the dataset.",
+          "items": {
+            "type": "string"
+          },
+          "title": "Suggested Questions",
+          "type": "array"
+        }
+      },
+      "required": [
+        "dataset_domain",
+        "primary_entities",
+        "important_dimensions",
+        "important_metrics",
+        "analytical_goals",
+        "suggested_questions"
+      ],
+      "title": "SemanticUnderstanding",
+      "type": "object",
+      "x-contract-layer-version": "0.1.0"
+    },
+    "ValidationIssue": {
+      "properties": {
+        "component": {
+          "enum": [
+            "metric_output",
+            "kpi",
+            "chart"
+          ],
+          "title": "Component",
+          "type": "string"
+        },
+        "item_title": {
+          "title": "Item Title",
+          "type": "string"
+        },
+        "message": {
+          "title": "Message",
+          "type": "string"
+        },
+        "severity": {
+          "enum": [
+            "info",
+            "warning",
+            "error"
+          ],
+          "title": "Severity",
+          "type": "string"
+        },
+        "source_output_key": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Source Output Key"
+        },
+        "suggested_fix": {
+          "title": "Suggested Fix",
+          "type": "string"
+        }
+      },
+      "required": [
+        "severity",
+        "component",
+        "item_title",
+        "message",
+        "suggested_fix"
+      ],
+      "title": "ValidationIssue",
+      "type": "object"
+    }
+  },
+  "$id": "https://dashboard-studio.local/contracts/analytical-brain-input.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "properties": {
+    "analysis_outputs": {
+      "additionalProperties": true,
+      "description": "Executed deterministic metric outputs, compacted for LLM context.",
+      "title": "Analysis Outputs",
+      "type": "object"
+    },
+    "dashboard_plan": {
+      "$ref": "#/$defs/DashboardPlan",
+      "description": "Final dashboard plan shown to the user."
+    },
+    "df_context": {
+      "description": "Compact dataframe context used by upstream agents.",
+      "title": "Df Context",
+      "type": "string"
+    },
+    "metadata": {
+      "additionalProperties": true,
+      "description": "Saved dataset metadata.",
+      "title": "Metadata",
+      "type": "object"
+    },
+    "metric_plan": {
+      "$ref": "#/$defs/PandasMetricPlan",
+      "description": "Structured output from the metric code planner."
+    },
+    "semantic_understanding": {
+      "$ref": "#/$defs/SemanticUnderstanding",
+      "description": "Structured output from the semantic understanding agent."
+    },
+    "validation_report": {
+      "$ref": "#/$defs/DashboardValidationReport",
+      "description": "Deterministic dashboard validation report."
+    }
+  },
+  "required": [
+    "metadata",
+    "semantic_understanding",
+    "metric_plan",
+    "analysis_outputs",
+    "dashboard_plan",
+    "validation_report",
+    "df_context"
+  ],
+  "title": "AnalyticalBrainInput",
+  "type": "object",
+  "x-contract-layer-version": "0.1.0"
+}

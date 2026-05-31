@@ -12,15 +12,20 @@ import {
   History,
   LineChart,
   Loader2,
+  PlayCircle,
   ShieldCheck,
   Sparkles
 } from "lucide-react";
-import { FormEvent, useMemo, useState } from "react";
+import { FormEvent, useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
+  AnalysisOutputs,
   DashboardChart,
   RunBundle,
   RunSummary,
+  SerializedAnalysisOutput,
+  generateRun,
+  getJob,
   importKaggleDataset,
   getLatestRun,
   getNotebook,
@@ -57,6 +62,11 @@ function chartIcon(chartType: string) {
 function artifactCount(run?: RunSummary) {
   if (!run) return 0;
   return Object.values(run.artifacts).filter(Boolean).length;
+}
+
+function artifactTotal(run?: RunSummary) {
+  if (!run) return 0;
+  return Object.keys(run.artifacts).length;
 }
 
 function joinSource(source: string[] | string | undefined) {
@@ -104,7 +114,7 @@ function ShellState({
               >
                 <span>{sourceLabel(run.source_file)}</span>
                 <small>
-                  {formatNumber(run.row_count)} rows - {artifactCount(run)}/9 artifacts
+                  {formatNumber(run.row_count)} rows - {artifactCount(run)}/{artifactTotal(run)} artifacts
                 </small>
               </button>
             ))}
@@ -142,6 +152,82 @@ function Header({ bundle }: { bundle?: RunBundle }) {
   );
 }
 
+function RunActions({ bundle }: { bundle?: RunBundle }) {
+  const queryClient = useQueryClient();
+  const [jobId, setJobId] = useState<string | null>(null);
+  const runId = bundle?.summary.run_id;
+  const hasDataset = Boolean(bundle?.summary.artifacts.dataset);
+
+  const generationMutation = useMutation({
+    mutationFn: () => {
+      if (!runId) {
+        throw new Error("Select a run first.");
+      }
+      return generateRun(runId, true);
+    },
+    onSuccess: (job) => setJobId(job.job_id)
+  });
+
+  const jobQuery = useQuery({
+    queryKey: ["job", jobId],
+    queryFn: () => getJob(jobId as string),
+    enabled: Boolean(jobId),
+    refetchInterval: (query) => {
+      const status = query.state.data?.status;
+      return status === "completed" || status === "failed" ? false : 1500;
+    }
+  });
+
+  const job = jobQuery.data;
+  const jobIsActive = generationMutation.isPending || job?.status === "queued" || job?.status === "running";
+
+  useEffect(() => {
+    setJobId(null);
+  }, [runId]);
+
+  useEffect(() => {
+    if (job?.status !== "completed" && job?.status !== "failed") return;
+    queryClient.invalidateQueries({ queryKey: ["runs"] });
+    queryClient.invalidateQueries({ queryKey: ["latest-run"] });
+    if (runId) {
+      queryClient.invalidateQueries({ queryKey: ["run", runId] });
+      queryClient.invalidateQueries({ queryKey: ["notebook", runId] });
+    }
+  }, [job?.status, queryClient, runId]);
+
+  return (
+    <section className="actionBar">
+      <button
+        className="primaryButton"
+        disabled={!hasDataset || jobIsActive}
+        onClick={() => generationMutation.mutate()}
+        type="button"
+      >
+        {jobIsActive ? <Loader2 size={16} className="spin" /> : <PlayCircle size={16} />}
+        {jobIsActive ? "Generating" : "Generate dashboard"}
+      </button>
+      <div className="actionStatus">
+        {job ? (
+          <>
+            <strong>{job.status}</strong>
+            <span>{job.status === "failed" ? job.message : job.stage.replaceAll("_", " ")}</span>
+          </>
+        ) : generationMutation.isError ? (
+          <>
+            <strong>failed</strong>
+            <span>{String(generationMutation.error.message)}</span>
+          </>
+        ) : (
+          <>
+            <strong>{artifactCount(bundle?.summary)}/{artifactTotal(bundle?.summary)} artifacts</strong>
+            <span>{hasDataset ? "Ready to run agents" : "Load a dataset first"}</span>
+          </>
+        )}
+      </div>
+    </section>
+  );
+}
+
 function StatStrip({ bundle }: { bundle: RunBundle }) {
   const validationIssues = bundle.validation_report?.issues ?? [];
   const insights = bundle.analytical_insights?.key_insights ?? [];
@@ -165,6 +251,71 @@ function StatStrip({ bundle }: { bundle: RunBundle }) {
       </div>
     </section>
   );
+}
+
+function isNumber(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value);
+}
+
+function asNumber(value: unknown): number | null {
+  if (isNumber(value)) return value;
+  if (typeof value === "string" && value.trim() !== "") {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+  return null;
+}
+
+function outputRows(output?: SerializedAnalysisOutput): Array<Record<string, unknown>> {
+  if (!output) return [];
+  if (output.kind === "table") return output.rows;
+  if (output.kind === "mapping") return [output.value];
+  if (output.kind === "scalar") return [{ value: output.value }];
+  return [];
+}
+
+function outputColumns(output?: SerializedAnalysisOutput): string[] {
+  if (!output) return [];
+  if (output.kind === "table") return output.columns;
+  if (output.kind === "mapping") return Object.keys(output.value);
+  return ["value"];
+}
+
+function valueLabel(value: unknown) {
+  const numeric = asNumber(value);
+  if (numeric !== null) return formatNumber(Number(numeric.toFixed(2)));
+  if (value === null || value === undefined || value === "") return "-";
+  return String(value);
+}
+
+function formatDuration(durationMs?: number | null) {
+  if (durationMs === null || durationMs === undefined) return "-";
+  if (durationMs < 1000) return `${durationMs} ms`;
+  return `${(durationMs / 1000).toFixed(1)} s`;
+}
+
+function calculateRenderedKpi(
+  output: SerializedAnalysisOutput | undefined,
+  valueColumn?: string | null
+) {
+  if (!output) return "Missing";
+  if (output.kind === "scalar") return valueLabel(output.value);
+  if (output.kind === "mapping") {
+    if (valueColumn && valueColumn in output.value) return valueLabel(output.value[valueColumn]);
+    const firstNumeric = Object.values(output.value).find((value) => asNumber(value) !== null);
+    return valueLabel(firstNumeric ?? Object.values(output.value)[0]);
+  }
+
+  const rows = output.rows;
+  if (rows.length === 0) return "-";
+  const numericValues = rows
+    .map((row) => asNumber(valueColumn ? row[valueColumn] : undefined))
+    .filter((value): value is number => value !== null);
+  if (numericValues.length > 0) {
+    const average = numericValues.reduce((sum, value) => sum + value, 0) / numericValues.length;
+    return valueLabel(average);
+  }
+  return valueLabel(rows[0][valueColumn || output.columns[0]]);
 }
 
 function ChartSpecCard({ chart }: { chart: DashboardChart }) {
@@ -195,9 +346,209 @@ function ChartSpecCard({ chart }: { chart: DashboardChart }) {
   );
 }
 
+function DataTable({ output, columns }: { output: SerializedAnalysisOutput; columns?: string[] }) {
+  const rows = outputRows(output).slice(0, 25);
+  const tableColumns = (columns?.length ? columns : outputColumns(output)).slice(0, 8);
+  if (rows.length === 0) return <div className="renderEmpty">No rows returned.</div>;
+
+  return (
+    <div className="tableWrap">
+      <table>
+        <thead>
+          <tr>
+            {tableColumns.map((column) => (
+              <th key={column}>{column}</th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((row, index) => (
+            <tr key={index}>
+              {tableColumns.map((column) => (
+                <td key={column}>{valueLabel(row[column])}</td>
+              ))}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function BarRenderer({ chart, output }: { chart: DashboardChart; output: SerializedAnalysisOutput }) {
+  const allRows = outputRows(output);
+  const rows = allRows.slice(0, chart.top_n ?? 12);
+  const xKey = chart.x || outputColumns(output)[0];
+  const yKey = chart.y || outputColumns(output).find((column) => allRows.some((row) => asNumber(row[column]) !== null));
+  if (!xKey || !yKey) return <DataTable output={output} />;
+
+  const colorKey = chart.color && outputColumns(output).includes(chart.color) ? chart.color : null;
+  if (colorKey && chart.orientation !== "horizontal") {
+    const grouped = new Map<string, { total: number; segments: Array<{ label: string; value: number }> }>();
+    for (const row of allRows) {
+      const groupLabel = valueLabel(row[xKey]);
+      const segmentLabel = valueLabel(row[colorKey]);
+      const value = Math.max(asNumber(row[yKey]) ?? 0, 0);
+      const group = grouped.get(groupLabel) ?? { total: 0, segments: [] };
+      group.total += value;
+      group.segments.push({ label: segmentLabel, value });
+      grouped.set(groupLabel, group);
+    }
+    const groups = Array.from(grouped.entries()).slice(0, chart.top_n ?? 12);
+    const maxTotal = Math.max(...groups.map(([, group]) => group.total), 1);
+
+    return (
+      <div className="barViz stacked">
+        {groups.map(([label, group]) => {
+          const height = `${Math.max((group.total / maxTotal) * 100, 2)}%`;
+          return (
+            <div className="barRow" key={label}>
+              <span className="barLabel" title={label}>{label}</span>
+              <span className="barTrack" style={{ height }}>
+                {group.segments.map((segment, index) => {
+                  const segmentHeight = `${Math.max((segment.value / Math.max(group.total, 1)) * 100, 2)}%`;
+                  return (
+                    <span
+                      className="barSegment"
+                      key={`${segment.label}-${index}`}
+                      style={{ height: segmentHeight }}
+                      title={`${segment.label}: ${valueLabel(segment.value)}`}
+                    />
+                  );
+                })}
+              </span>
+              <strong>{valueLabel(group.total)}</strong>
+            </div>
+          );
+        })}
+      </div>
+    );
+  }
+
+  const values = rows.map((row) => asNumber(row[yKey]) ?? 0);
+  const max = Math.max(...values.map((value) => Math.abs(value)), 1);
+  const horizontal = chart.orientation === "horizontal";
+
+  return (
+    <div className={`barViz ${horizontal ? "horizontal" : ""}`}>
+      {rows.map((row, index) => {
+        const value = values[index];
+        const size = `${Math.max((Math.abs(value) / max) * 100, 2)}%`;
+        return (
+          <div className="barRow" key={`${valueLabel(row[xKey])}-${index}`}>
+            <span className="barLabel">{valueLabel(row[xKey])}</span>
+            <span className="barTrack">
+              <span className="barFill" style={horizontal ? { width: size } : { height: size }} />
+            </span>
+            <strong>{valueLabel(value)}</strong>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function LineRenderer({ chart, output }: { chart: DashboardChart; output: SerializedAnalysisOutput }) {
+  const rows = outputRows(output).slice(0, 80);
+  const xKey = chart.x || outputColumns(output)[0];
+  const yKey = chart.y || chart.metrics?.[0] || outputColumns(output).find((column) => rows.some((row) => asNumber(row[column]) !== null));
+  if (!xKey || !yKey) return <DataTable output={output} />;
+
+  const points = rows
+    .map((row, index) => ({ index, label: valueLabel(row[xKey]), value: asNumber(row[yKey]) }))
+    .filter((point): point is { index: number; label: string; value: number } => point.value !== null);
+  if (points.length < 2) return <DataTable output={output} />;
+
+  const min = Math.min(...points.map((point) => point.value));
+  const max = Math.max(...points.map((point) => point.value));
+  const span = max - min || 1;
+  const path = points
+    .map((point, index) => {
+      const x = (index / Math.max(points.length - 1, 1)) * 100;
+      const y = 100 - ((point.value - min) / span) * 86 - 7;
+      return `${index === 0 ? "M" : "L"} ${x.toFixed(2)} ${y.toFixed(2)}`;
+    })
+    .join(" ");
+
+  return (
+    <div className="lineViz">
+      <svg viewBox="0 0 100 100" role="img" aria-label={chart.title} preserveAspectRatio="none">
+        <path d={path} />
+      </svg>
+      <div className="axisMeta">
+        <span>{points[0].label}</span>
+        <strong>{valueLabel(min)} - {valueLabel(max)}</strong>
+        <span>{points[points.length - 1].label}</span>
+      </div>
+    </div>
+  );
+}
+
+function ScatterRenderer({ chart, output }: { chart: DashboardChart; output: SerializedAnalysisOutput }) {
+  const rows = outputRows(output).slice(0, 120);
+  const xKey = chart.x || outputColumns(output)[0];
+  const yKey = chart.y || outputColumns(output)[1];
+  if (!xKey || !yKey) return <DataTable output={output} />;
+  const points = rows
+    .map((row) => ({ x: asNumber(row[xKey]), y: asNumber(row[yKey]) }))
+    .filter((point): point is { x: number; y: number } => point.x !== null && point.y !== null);
+  if (points.length < 2) return <DataTable output={output} />;
+  const minX = Math.min(...points.map((point) => point.x));
+  const maxX = Math.max(...points.map((point) => point.x));
+  const minY = Math.min(...points.map((point) => point.y));
+  const maxY = Math.max(...points.map((point) => point.y));
+  const spanX = maxX - minX || 1;
+  const spanY = maxY - minY || 1;
+  return (
+    <div className="scatterViz">
+      <svg viewBox="0 0 100 100" role="img" aria-label={chart.title}>
+        {points.map((point, index) => (
+          <circle
+            cx={6 + ((point.x - minX) / spanX) * 88}
+            cy={94 - ((point.y - minY) / spanY) * 88}
+            key={index}
+            r="2.2"
+          />
+        ))}
+      </svg>
+      <div className="axisMeta">
+        <span>{xKey}</span>
+        <strong>{points.length} points</strong>
+        <span>{yKey}</span>
+      </div>
+    </div>
+  );
+}
+
+function RenderedChart({ chart, outputs }: { chart: DashboardChart; outputs?: AnalysisOutputs | null }) {
+  const output = outputs?.[chart.source_output_key];
+  if (!output) return <ChartSpecCard chart={chart} />;
+
+  return (
+    <article className="renderedChart">
+      <div className="chartHeader">
+        <div>
+          <div className="chartTitle">{chart.title}</div>
+          <p>{chart.rationale}</p>
+        </div>
+        <span className="chartType">
+          {chartIcon(chart.chart_type)}
+          {chart.chart_type}
+        </span>
+      </div>
+      {chart.chart_type === "bar" || chart.chart_type === "histogram" ? <BarRenderer chart={chart} output={output} /> : null}
+      {chart.chart_type === "line" || chart.chart_type === "multi_line" ? <LineRenderer chart={chart} output={output} /> : null}
+      {chart.chart_type === "scatter" ? <ScatterRenderer chart={chart} output={output} /> : null}
+      {chart.chart_type === "table" || chart.chart_type === "text" || chart.chart_type === "kpi" ? <DataTable output={output} /> : null}
+      {chart.scale_note ? <div className="note">{chart.scale_note}</div> : null}
+    </article>
+  );
+}
+
 function DashboardView({ bundle }: { bundle: RunBundle }) {
   const plan = bundle.dashboard_plan;
   if (!plan) return <EmptyState title="No dashboard plan" />;
+  const outputs = bundle.analysis_outputs;
 
   return (
     <div className="workspaceStack">
@@ -212,6 +563,7 @@ function DashboardView({ bundle }: { bundle: RunBundle }) {
           {plan.kpis.map((kpi) => (
             <div className="kpi" key={kpi.title}>
               <span>{kpi.source_output_key}</span>
+              <strong className="kpiValue">{calculateRenderedKpi(outputs?.[kpi.source_output_key], kpi.value_column)}</strong>
               <strong>{kpi.title}</strong>
               <p>{kpi.rationale}</p>
             </div>
@@ -226,7 +578,7 @@ function DashboardView({ bundle }: { bundle: RunBundle }) {
         </div>
         <div className="cardGrid">
           {plan.overview_charts.map((chart) => (
-            <ChartSpecCard chart={chart} key={chart.title} />
+            <RenderedChart chart={chart} key={chart.title} outputs={outputs} />
           ))}
         </div>
       </section>
@@ -241,7 +593,7 @@ function DashboardView({ bundle }: { bundle: RunBundle }) {
             <div className="questionItem" key={view.question}>
               <h3>{view.question}</h3>
               <p>{view.answer_strategy}</p>
-              <ChartSpecCard chart={view.chart} />
+              <RenderedChart chart={view.chart} outputs={outputs} />
             </div>
           ))}
         </div>
@@ -467,22 +819,66 @@ function NotebookView({ runId, enabled }: { runId: string; enabled: boolean }) {
 
 function ArtifactsView({ bundle }: { bundle: RunBundle }) {
   const entries = Object.entries(bundle.summary.artifacts);
+  const trace = bundle.trace;
   return (
-    <section className="panel">
-      <div className="panelTitle">
-        <FileCode2 size={17} />
-        Artifacts
-      </div>
-      <div className="artifactGrid">
-        {entries.map(([name, exists]) => (
-          <div className="artifact" key={name}>
-            <span className={exists ? "dot good" : "dot muted"} />
-            <strong>{name.replaceAll("_", " ")}</strong>
-            <small>{exists ? "available" : "missing"}</small>
+    <div className="workspaceStack">
+      <section className="panel">
+        <div className="panelTitle">
+          <FileCode2 size={17} />
+          Artifacts
+        </div>
+        <div className="artifactGrid">
+          {entries.map(([name, exists]) => (
+            <div className="artifact" key={name}>
+              <span className={exists ? "dot good" : "dot muted"} />
+              <strong>{name.replaceAll("_", " ")}</strong>
+              <small>{exists ? "available" : "missing"}</small>
+            </div>
+          ))}
+        </div>
+      </section>
+
+      <section className="panel">
+        <div className="panelTitle">
+          <History size={17} />
+          Run Trace
+        </div>
+        {!trace ? (
+          <div className="traceEmpty">No trace artifact for this run.</div>
+        ) : (
+          <div className="traceTimeline">
+            <div className={`traceSummary ${trace.status}`}>
+              <strong>{trace.status.replaceAll("_", " ")}</strong>
+              <span>{formatDuration(trace.duration_ms)}</span>
+              <small>{trace.message || trace.run_id}</small>
+            </div>
+            {trace.events.map((event, index) => (
+              <article className={`traceEvent ${event.status}`} key={`${event.stage}-${index}`}>
+                <div className="traceEventHead">
+                  <strong>{event.stage.replaceAll("_", " ")}</strong>
+                  <span>{event.status}</span>
+                  <small>{formatDuration(event.duration_ms)}</small>
+                </div>
+                {event.message ? <p>{event.message}</p> : null}
+                {event.error_message ? (
+                  <p className="traceError">
+                    {event.error_type ? `${event.error_type}: ` : ""}
+                    {event.error_message}
+                  </p>
+                ) : null}
+                {Object.keys(event.artifact_paths).length > 0 ? (
+                  <div className="traceArtifacts">
+                    {Object.keys(event.artifact_paths).map((name) => (
+                      <span key={name}>{name.replaceAll("_", " ")}</span>
+                    ))}
+                  </div>
+                ) : null}
+              </article>
+            ))}
           </div>
-        ))}
-      </div>
-    </section>
+        )}
+      </section>
+    </div>
   );
 }
 
@@ -525,6 +921,7 @@ export default function Home() {
       <ShellState selectedRunId={selectedRunId} onSelectRun={setSelectedRunId} />
       <section className="mainPane">
         <Header bundle={bundle} />
+        <RunActions bundle={bundle} />
         <nav className="viewTabs">
           {navItems.map((item) => (
             <button className={active === item ? "active" : ""} key={item} onClick={() => setActive(item)}>
